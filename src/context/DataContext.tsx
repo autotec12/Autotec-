@@ -129,9 +129,13 @@ const defaultSettings: CompanySettings = {
   phone: '(11) 98765-4321',
   whatsapp: '(11) 98765-4321',
   email: 'contato@autotec.com.br',
+  address: 'Atendimento e Suporte em todo o território nacional',
+  city: 'São Paulo',
+  state: 'SP',
+  zipCode: '01310-100',
+  website: 'www.autotec.com.br',
   pixKey: '38.450.812/0001-94',
   pixKeyType: 'CNPJ',
-  address: 'Atendimento e Suporte em todo o território nacional',
   receiptFooterMessage: 'Agradecemos a confiança e preferência pelos serviços AUTOTEC!',
   logoSvg: AUTOTEC_LOGO_ORIGINAL_DATA_URI,
 };
@@ -726,6 +730,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       receiptNumber,
       remainingAfterPayment: newRemainingBalance,
       notes,
+      companySnapshot: { ...companySettings },
       createdAt: now,
     };
 
@@ -760,14 +765,17 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const updateCompanySettings = async (settings: Partial<CompanySettings>) => {
     try {
       const now = new Date().toISOString();
-      await updateDoc(doc(db, 'company_settings', 'default'), cleanFirestoreData({
+      const payload = cleanFirestoreData({
+        ...companySettings,
         ...settings,
         updatedAt: now,
         updatedBy: user?.uid || '',
-      }));
-      await logAudit('UPDATE', 'CompanySettings', 'default', 'Atualizou configurações da empresa e recibos');
+      });
+      await setDoc(doc(db, 'company_settings', 'default'), payload, { merge: true });
+      await logAudit('UPDATE', 'CompanySettings', 'default', 'Atualizou dados cadastrais da empresa e recibos');
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, 'company_settings/default');
+      throw error;
     }
   };
 

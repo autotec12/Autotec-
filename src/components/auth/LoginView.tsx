@@ -1,106 +1,338 @@
 import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { Sparkles, CheckCircle2 } from 'lucide-react';
+import {
+  Sparkles,
+  CheckCircle2,
+  Lock,
+  Mail,
+  Eye,
+  EyeOff,
+  Loader2,
+  AlertCircle,
+  ArrowLeft,
+  KeyRound,
+  ShieldCheck,
+} from 'lucide-react';
+
+function getFirebaseAuthErrorMessage(errorCode: string): string {
+  switch (errorCode) {
+    case 'auth/invalid-credential':
+    case 'auth/wrong-password':
+    case 'auth/user-not-found':
+      return 'E-mail ou senha incorretos. Verifique os dados digitados e tente novamente.';
+    case 'auth/invalid-email':
+      return 'O formato do e-mail informado é inválido. Exemplo: usuario@autotec.com.br';
+    case 'auth/user-disabled':
+      return 'Esta conta de acesso foi desativada pelo administrador.';
+    case 'auth/too-many-requests':
+      return 'Muitas tentativas consecutivas sem sucesso. Por segurança, aguarde alguns instantes antes de tentar novamente.';
+    case 'auth/network-request-failed':
+      return 'Não foi possível conectar aos servidores do Firebase. Verifique sua conexão com a internet.';
+    case 'auth/missing-password':
+      return 'Por favor, digite a sua senha de acesso.';
+    default:
+      return 'Falha ao autenticar. Verifique suas credenciais ou solicite a recuperação de senha.';
+  }
+}
 
 export const LoginView: React.FC = () => {
-  const { loginWithGoogle } = useAuth();
+  const { loginWithEmail, resetPassword } = useAuth();
+
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleLogin = async () => {
+  // Password reset state
+  const [isResetMode, setIsResetMode] = useState(false);
+  const [resetEmail, setResetEmail] = useState('');
+  const [resetLoading, setResetLoading] = useState(false);
+  const [resetSuccess, setResetSuccess] = useState<string | null>(null);
+  const [resetError, setResetError] = useState<string | null>(null);
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+
+    const cleanEmail = email.trim();
+    if (!cleanEmail) {
+      setError('Informe o seu e-mail de acesso cadastrado.');
+      return;
+    }
+    if (!password) {
+      setError('Informe a sua senha de acesso.');
+      return;
+    }
+
     try {
       setLoading(true);
-      setError(null);
-      await loginWithGoogle();
+      await loginWithEmail(cleanEmail, password);
     } catch (err: any) {
-      console.error('Login error:', err);
-      setError('Falha ao autenticar com o Google. Certifique-se de que popups estão habilitados no navegador.');
+      console.error('Email login failed:', err);
+      const code = err?.code || '';
+      setError(getFirebaseAuthErrorMessage(code));
+    } finally {
       setLoading(false);
+    }
+  };
+
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setResetError(null);
+    setResetSuccess(null);
+
+    const cleanEmail = (resetEmail || email).trim();
+    if (!cleanEmail) {
+      setResetError('Por favor, informe o seu e-mail cadastrado para enviarmos as instruções.');
+      return;
+    }
+
+    try {
+      setResetLoading(true);
+      await resetPassword(cleanEmail);
+      setResetSuccess(
+        `E-mail de recuperação enviado para ${cleanEmail}! Verifique sua caixa de entrada e pasta de spam para redefinir sua senha.`
+      );
+    } catch (err: any) {
+      console.error('Password reset failed:', err);
+      const code = err?.code || '';
+      if (code === 'auth/user-not-found') {
+        setResetError('Nenhum usuário foi localizado com este e-mail cadastrado no sistema.');
+      } else if (code === 'auth/invalid-email') {
+        setResetError('O e-mail digitado é inválido. Verifique o formato.');
+      } else {
+        setResetError('Não foi possível enviar o e-mail de recuperação. Tente novamente mais tarde.');
+      }
+    } finally {
+      setResetLoading(false);
     }
   };
 
   return (
     <div className="min-h-screen bg-[#F3F4F2] flex flex-col justify-center items-center p-4 relative overflow-hidden">
-      {/* Subtle brand glow in background */}
-      <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-[#30334F]/5 rounded-full blur-3xl pointer-events-none" />
+      {/* Subtle brand backdrop glow */}
+      <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[650px] h-[650px] bg-[#30334F]/5 rounded-full blur-3xl pointer-events-none" />
 
-      <div className="w-full max-w-md bg-white border border-[#E2E4E0] rounded-3xl p-8 sm:p-10 shadow-xl relative z-10 text-center space-y-6">
-        {/* Official Brand Logo */}
+      <div className="w-full max-w-md bg-white border border-[#E2E4E0] rounded-3xl p-7 sm:p-10 shadow-xl relative z-10 text-center space-y-6">
+        {/* Brand Header & Official Logo */}
         <div className="flex flex-col items-center">
           <img
             src="/autotec-logo-original.png"
             alt="AUTOTEC Rastreamento Veicular"
-            className="h-24 sm:h-28 w-auto max-w-[280px] object-contain mx-auto mb-4"
+            className="h-20 sm:h-24 w-auto max-w-[260px] object-contain mx-auto mb-3"
           />
-          <span className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full bg-[#FFF5EB] text-[#C86905] text-xs font-bold mb-2 border border-[#FCD9B3]">
-            <Sparkles className="w-3.5 h-3.5 text-[#F28C1B]" />
-            Gestão Financeira &amp; Cobrança
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#30334F]/5 text-[#30334F] text-xs font-bold mb-1 border border-[#30334F]/10">
+            <ShieldCheck className="w-3.5 h-3.5 text-[#F28C1B]" />
+            Acesso Exclusivo do Proprietário
           </span>
           <p className="text-xs text-[#5F647E] mt-1 max-w-xs leading-relaxed">
-            Sistema oficial de controle financeiro de mensalidades, recebimentos e frotas rastreadas da AUTOTEC.
+            Sistema de uso pessoal e restrito para <strong className="text-[#30334F]">autotecrastreio@gmail.com</strong>.
           </p>
         </div>
 
-        {/* Highlights */}
-        <div className="p-4 bg-[#F8F9FA] border border-[#E2E4E0] rounded-2xl text-left space-y-2.5 text-xs text-[#1E2235]">
-          <div className="flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4 text-[#059669] shrink-0" />
-            <span>Controle contínuo de mensalidades por contrato</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4 text-[#059669] shrink-0" />
-            <span>Tratamento de pagamentos parciais com saldo residual</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4 text-[#059669] shrink-0" />
-            <span>Recibos vetorizados em SVG e cobrança via WhatsApp</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4 text-[#059669] shrink-0" />
-            <span>Sincronização em tempo real via Cloud Firestore</span>
-          </div>
-        </div>
+        {/* PASSWORD RESET VIEW */}
+        {isResetMode ? (
+          <form onSubmit={handleResetPassword} className="space-y-4 text-left">
+            <div className="flex items-center gap-2 pb-1 border-b border-[#E2E4E0]">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsResetMode(false);
+                  setResetError(null);
+                  setResetSuccess(null);
+                }}
+                className="p-1 text-slate-500 hover:text-[#30334F] rounded-lg transition"
+                title="Voltar ao Login"
+              >
+                <ArrowLeft className="w-4 h-4" />
+              </button>
+              <h3 className="text-xs font-black text-[#30334F] uppercase tracking-wider flex items-center gap-1.5">
+                <KeyRound className="w-4 h-4 text-[#F28C1B]" />
+                Recuperação de Senha
+              </h3>
+            </div>
 
-        {error && (
-          <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700">
-            {error}
-          </div>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Informe o e-mail oficial associado ao seu usuário no sistema. Enviaremos um link seguro pelo Firebase para você criar uma nova senha.
+            </p>
+
+            {resetSuccess && (
+              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 font-semibold flex items-start gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                <span>{resetSuccess}</span>
+              </div>
+            )}
+
+            {resetError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <span>{resetError}</span>
+              </div>
+            )}
+
+            {!resetSuccess && (
+              <>
+                <div>
+                  <label className="block text-xs font-bold text-[#30334F] mb-1.5">
+                    E-mail Cadastrado
+                  </label>
+                  <div className="relative">
+                    <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="email"
+                      value={resetEmail}
+                      onChange={(e) => setResetEmail(e.target.value)}
+                      placeholder="autotecrastreio@gmail.com"
+                      required
+                      autoFocus
+                      className="w-full bg-[#F8F9FA] border border-[#DCE0D9] rounded-xl pl-10 pr-3.5 py-2.5 text-sm text-[#1E2235] placeholder-slate-400 focus:outline-hidden focus:border-[#30334F] focus:bg-white transition"
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={resetLoading}
+                  className="w-full py-3 px-4 bg-[#F28C1B] hover:bg-[#d9770e] text-white rounded-xl font-bold text-xs shadow-md shadow-orange-500/20 flex items-center justify-center gap-2 transition disabled:opacity-50 cursor-pointer"
+                >
+                  {resetLoading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Enviando Instruções...
+                    </>
+                  ) : (
+                    'Enviar Link de Recuperação'
+                  )}
+                </button>
+              </>
+            )}
+
+            <div className="pt-2 text-center">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsResetMode(false);
+                  setResetError(null);
+                  setResetSuccess(null);
+                }}
+                className="text-xs font-bold text-[#30334F] hover:text-[#F28C1B] transition underline cursor-pointer"
+              >
+                Voltar para a tela de login
+              </button>
+            </div>
+          </form>
+        ) : (
+          /* STANDARD EMAIL & PASSWORD LOGIN FORM */
+          <form onSubmit={handleLogin} className="space-y-4 text-left">
+            {error && (
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <span>{error}</span>
+              </div>
+            )}
+
+            {/* Email Field */}
+            <div>
+              <label className="block text-xs font-bold text-[#30334F] mb-1.5">
+                E-mail Institucional *
+              </label>
+              <div className="relative">
+                <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="ex: autotecrastreio@gmail.com"
+                  required
+                  autoComplete="email"
+                  className="w-full bg-[#F8F9FA] border border-[#DCE0D9] rounded-xl pl-10 pr-3.5 py-2.5 text-sm text-[#1E2235] placeholder-slate-400 focus:outline-hidden focus:border-[#30334F] focus:bg-white transition"
+                />
+              </div>
+            </div>
+
+            {/* Password Field with Show/Hide toggle */}
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-xs font-bold text-[#30334F]">
+                  Senha de Acesso *
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setResetEmail(email);
+                    setIsResetMode(true);
+                  }}
+                  className="text-2xs font-semibold text-[#F28C1B] hover:text-[#c86905] transition underline cursor-pointer"
+                >
+                  Esqueci minha senha
+                </button>
+              </div>
+              <div className="relative">
+                <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Digite sua senha"
+                  required
+                  autoComplete="current-password"
+                  className="w-full bg-[#F8F9FA] border border-[#DCE0D9] rounded-xl pl-10 pr-10 py-2.5 text-sm text-[#1E2235] placeholder-slate-400 focus:outline-hidden focus:border-[#30334F] focus:bg-white transition"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  tabIndex={-1}
+                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition cursor-pointer"
+                  title={showPassword ? 'Ocultar senha' : 'Exibir senha'}
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+
+            {/* Submit Button */}
+            <div className="pt-2">
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full py-3.5 px-4 bg-[#30334F] hover:bg-[#222538] text-white rounded-xl font-bold text-sm shadow-md shadow-[#30334F]/20 flex items-center justify-center gap-2 transition transform hover:scale-[1.01] active:scale-[0.99] disabled:opacity-50 cursor-pointer"
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-[#F28C1B]" />
+                    <span>Autenticando...</span>
+                  </>
+                ) : (
+                  <>
+                    <ShieldCheck className="w-4 h-4 text-[#F28C1B]" />
+                    <span>Entrar no Sistema</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </form>
         )}
 
-        {/* Google Login Button */}
-        <div>
-          <button
-            onClick={handleLogin}
-            disabled={loading}
-            className="w-full py-3.5 px-4 bg-[#30334F] hover:bg-[#222538] text-white rounded-2xl font-bold text-sm shadow-md flex items-center justify-center gap-3 transition transform hover:scale-[1.01] active:scale-[0.99] disabled:opacity-50 cursor-pointer"
-          >
-            <div className="bg-white p-1 rounded-full">
-              <svg className="w-4 h-4" viewBox="0 0 24 24">
-                <path
-                  fill="#4285F4"
-                  d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                />
-                <path
-                  fill="#34A853"
-                  d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                />
-                <path
-                  fill="#FBBC05"
-                  d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-                />
-                <path
-                  fill="#EA4335"
-                  d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-                />
-              </svg>
-            </div>
-            <span>{loading ? 'Conectando ao Google...' : 'Entrar com Conta Google'}</span>
-          </button>
+        {/* Feature Highlights Card */}
+        <div className="p-3.5 bg-[#F8F9FA] border border-[#E2E4E0] rounded-2xl text-left space-y-2 text-2xs text-[#1E2235]">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-3.5 h-3.5 text-[#059669] shrink-0" />
+            <span>Acesso pessoal e exclusivo: <strong>autotecrastreio@gmail.com</strong></span>
+          </div>
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-3.5 h-3.5 text-[#059669] shrink-0" />
+            <span>Desbloqueio local rápido com <strong>PIN pessoal de 6 dígitos</strong></span>
+          </div>
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-3.5 h-3.5 text-[#059669] shrink-0" />
+            <span>Bloqueio automático após 5 minutos de inatividade real</span>
+          </div>
         </div>
 
         {/* Footer info */}
-        <div className="pt-2 text-2xs text-[#5F647E]">
-          Acesso restrito e autenticado para operadores e administradores AUTOTEC.
+        <div className="pt-1 text-2xs text-[#5F647E]">
+          AUTOTEC Rastreamento Veicular • Plataforma Financeira Oficial
         </div>
       </div>
     </div>

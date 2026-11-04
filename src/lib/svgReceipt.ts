@@ -43,14 +43,24 @@ export function generateReceiptSvg(
   vehicle?: Vehicle,
   company?: CompanySettings
 ): string {
-  const companyName = company?.companyName || 'AUTOTEC RASTREAMENTO VEICULAR';
-  const cnpj = company?.cnpj || '38.450.812/0001-94';
-  const phone = company?.phone || '(11) 98765-4321';
-  const whatsapp = company?.whatsapp || phone;
-  const address = company?.address || 'Atendimento e Suporte em todo o território nacional';
-  const pixKey = company?.pixKey || phone;
-  const pixType = company?.pixKeyType || 'Chave PIX';
-  const logoDataUri = company?.logoSvg || AUTOTEC_LOGO_ORIGINAL_DATA_URI;
+  const effectiveCompany: CompanySettings = {
+    ...(company || {}),
+    ...(payment.companySnapshot || {}),
+  } as CompanySettings;
+
+  const companyName = effectiveCompany.companyName || 'AUTOTEC RASTREAMENTO VEICULAR';
+  const cnpj = effectiveCompany.cnpj;
+  const phone = effectiveCompany.phone;
+  const whatsapp = effectiveCompany.whatsapp;
+  const address = effectiveCompany.address;
+  const city = effectiveCompany.city;
+  const state = effectiveCompany.state;
+  const zipCode = effectiveCompany.zipCode;
+  const email = effectiveCompany.email;
+  const website = effectiveCompany.website;
+  const pixKey = effectiveCompany.pixKey;
+  const pixType = effectiveCompany.pixKeyType || 'Chave PIX';
+  const logoDataUri = effectiveCompany.logoSvg || AUTOTEC_LOGO_ORIGINAL_DATA_URI;
 
   const clientName = client?.name || payment.clientName || 'Cliente';
   const clientDoc = client?.document || 'Não informado';
@@ -72,8 +82,57 @@ export function generateReceiptSvg(
   const dateFormatted = formatDateTime(payment.paymentDate || payment.createdAt);
   const operatorName = payment.operatorName || 'Operador Autorizado';
   const receiptNum = payment.receiptNumber || `REC-${Date.now()}`;
-  const footerMsg = company?.receiptFooterMessage || 'Agradecemos a confiança e preferência pelos serviços AUTOTEC!';
+  const footerMsg = effectiveCompany.receiptFooterMessage || 'Agradecemos a confiança e preferência pelos serviços AUTOTEC!';
   const methodText = PAYMENT_METHOD_LABELS[payment.paymentMethod] || payment.paymentMethod;
+
+  // Build dynamic company lines (only displaying filled fields)
+  const headerLinesSvg: string[] = [];
+  let currentY = 88;
+  const lineGap = 18;
+
+  // 1. CNPJ / Document & Phone / WhatsApp
+  const docParts: string[] = [];
+  if (cnpj) docParts.push(`CNPJ: <tspan fill="#1E293B" font-weight="700">${escapeXml(cnpj)}</tspan>`);
+  if (whatsapp || phone) {
+    if (whatsapp && phone && whatsapp !== phone) {
+      docParts.push(`Tel: <tspan fill="#1E293B">${escapeXml(phone)}</tspan> • WhatsApp: <tspan fill="#1E293B">${escapeXml(whatsapp)}</tspan>`);
+    } else {
+      docParts.push(`WhatsApp: <tspan fill="#1E293B">${escapeXml(whatsapp || phone)}</tspan>`);
+    }
+  }
+  if (docParts.length > 0) {
+    headerLinesSvg.push(`<text x="285" y="${currentY}" font-size="11" font-weight="600" fill="#475569">${docParts.join(' • ')}</text>`);
+    currentY += lineGap;
+  }
+
+  // 2. Address & Location
+  const addrParts: string[] = [];
+  if (address) addrParts.push(escapeXml(address));
+  const locationParts: string[] = [];
+  if (city) locationParts.push(escapeXml(city));
+  if (state) locationParts.push(escapeXml(state));
+  if (zipCode) locationParts.push(`CEP: ${escapeXml(zipCode)}`);
+  if (locationParts.length > 0) {
+    addrParts.push(locationParts.join(' - '));
+  }
+  if (addrParts.length > 0) {
+    headerLinesSvg.push(`<text x="285" y="${currentY}" font-size="11" fill="#64748B">${addrParts.join(', ')}</text>`);
+    currentY += lineGap;
+  }
+
+  // 3. Email & Website
+  const webParts: string[] = [];
+  if (email) webParts.push(`E-mail: <tspan fill="#1E293B">${escapeXml(email)}</tspan>`);
+  if (website) webParts.push(`Site: <tspan fill="#1E293B">${escapeXml(website)}</tspan>`);
+  if (webParts.length > 0) {
+    headerLinesSvg.push(`<text x="285" y="${currentY}" font-size="11" fill="#475569">${webParts.join(' • ')}</text>`);
+    currentY += lineGap;
+  }
+
+  // 4. PIX Key
+  if (pixKey) {
+    headerLinesSvg.push(`<text x="285" y="${currentY}" font-size="11" font-weight="600" fill="#0284C7">Chave PIX (${escapeXml(pixType)}): <tspan fill="#0369A1" font-weight="700">${escapeXml(pixKey)}</tspan></text>`);
+  }
 
   return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 800 1150" width="100%" height="100%" style="background:#ffffff; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; display:block;">
   <defs>
@@ -89,6 +148,9 @@ export function generateReceiptSvg(
       <stop offset="0%" stop-color="#FFFBEB" />
       <stop offset="100%" stop-color="#FEF3C7" />
     </linearGradient>
+    <clipPath id="companyHeaderClip">
+      <rect x="280" y="42" width="315" height="126" rx="6" />
+    </clipPath>
   </defs>
 
   <!-- Canvas Outer Border -->
@@ -104,11 +166,11 @@ export function generateReceiptSvg(
   <!-- Official AUTOTEC Logo (Original Full-Color Embedded) -->
   <image href="${logoDataUri}" xlink:href="${logoDataUri}" x="50" y="48" width="220" height="114" preserveAspectRatio="xMidYMid meet" />
 
-  <!-- Company Identification Info -->
-  <text x="285" y="70" font-size="20" font-weight="900" fill="#30334F" letter-spacing="0.5">${escapeXml(companyName)}</text>
-  <text x="285" y="93" font-size="12" font-weight="600" fill="#475569">CNPJ: <tspan fill="#1E293B">${escapeXml(cnpj)}</tspan> • Tel/WhatsApp: <tspan fill="#1E293B">${escapeXml(whatsapp)}</tspan></text>
-  <text x="285" y="113" font-size="11" fill="#64748B">${escapeXml(address)}</text>
-  <text x="285" y="133" font-size="11" font-weight="600" fill="#0284C7">Chave PIX (${escapeXml(pixType)}): <tspan fill="#0369A1">${escapeXml(pixKey)}</tspan></text>
+  <!-- Company Identification Info (Protected within clip area against badge overlap) -->
+  <g clip-path="url(#companyHeaderClip)">
+    <text x="285" y="68" font-size="18" font-weight="900" fill="#30334F" letter-spacing="0.3">${escapeXml(companyName)}</text>
+    ${headerLinesSvg.join('\n    ')}
+  </g>
 
   <!-- Receipt Number Voucher Badge -->
   <rect x="600" y="55" width="150" height="80" rx="10" fill="#F1F5F9" stroke="#CBD5E1" stroke-width="1.5" />
@@ -154,8 +216,8 @@ export function generateReceiptSvg(
   <!-- Vertical Divider -->
   <line x1="400" y1="265" x2="400" y2="405" stroke="#CBD5E1" stroke-dasharray="4 4" />
 
-  <!-- Right: Vehicle / Contract Info -->
-  <text x="425" y="278" font-size="12" font-weight="800" fill="#64748B" letter-spacing="0.5">DADOS DO VEÍCULO &amp; CONTRATO</text>
+  <!-- Right: Vehicle Info -->
+  <text x="425" y="278" font-size="12" font-weight="800" fill="#64748B" letter-spacing="0.5">DADOS DO VEÍCULO</text>
   
   <!-- License Plate Tag -->
   <rect x="425" y="290" width="130" height="34" rx="6" fill="#0F172A" />
@@ -386,30 +448,90 @@ export async function renderReceiptDirectToCanvas(
   }
 
   // Company details
-  const companyName = company?.companyName || 'AUTOTEC RASTREAMENTO VEICULAR';
-  const cnpj = company?.cnpj || '38.450.812/0001-94';
-  const phone = company?.phone || '(11) 98765-4321';
-  const whatsapp = company?.whatsapp || phone;
-  const address = company?.address || 'Atendimento e Suporte em todo o território nacional';
-  const pixKey = company?.pixKey || phone;
-  const pixType = company?.pixKeyType || 'Chave PIX';
+  const effectiveCompany: CompanySettings = {
+    ...(company || {}),
+    ...(payment.companySnapshot || {}),
+  } as CompanySettings;
+
+  const companyName = effectiveCompany.companyName || 'AUTOTEC RASTREAMENTO VEICULAR';
+  const cnpj = effectiveCompany.cnpj;
+  const phone = effectiveCompany.phone;
+  const whatsapp = effectiveCompany.whatsapp;
+  const address = effectiveCompany.address;
+  const city = effectiveCompany.city;
+  const state = effectiveCompany.state;
+  const zipCode = effectiveCompany.zipCode;
+  const email = effectiveCompany.email;
+  const website = effectiveCompany.website;
+  const pixKey = effectiveCompany.pixKey;
+  const pixType = effectiveCompany.pixKeyType || 'Chave PIX';
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(280, 42, 315, 126);
+  ctx.clip();
 
   ctx.textAlign = 'left';
-  ctx.font = '900 19px -apple-system, sans-serif';
-  ctx.fillStyle = '#0F172A';
-  ctx.fillText(companyName, 285, 72);
+  ctx.font = '900 18px -apple-system, sans-serif';
+  ctx.fillStyle = '#30334F';
+  ctx.fillText(companyName, 285, 68);
 
-  ctx.font = '600 12px -apple-system, sans-serif';
-  ctx.fillStyle = '#475569';
-  ctx.fillText(`CNPJ: ${cnpj} • Tel/WhatsApp: ${whatsapp}`, 285, 93);
+  let currentCanvasY = 88;
+  const canvasLineSpacing = 18;
 
-  ctx.font = '400 11px -apple-system, sans-serif';
-  ctx.fillStyle = '#64748B';
-  ctx.fillText(address, 285, 113);
+  // 1. CNPJ / CPF & Phone / WhatsApp
+  const docParts: string[] = [];
+  if (cnpj) docParts.push(`CNPJ: ${cnpj}`);
+  if (whatsapp || phone) {
+    if (whatsapp && phone && whatsapp !== phone) {
+      docParts.push(`Tel: ${phone} • WhatsApp: ${whatsapp}`);
+    } else {
+      docParts.push(`WhatsApp: ${whatsapp || phone}`);
+    }
+  }
+  if (docParts.length > 0) {
+    ctx.font = '600 11px -apple-system, sans-serif';
+    ctx.fillStyle = '#475569';
+    ctx.fillText(docParts.join(' • '), 285, currentCanvasY);
+    currentCanvasY += canvasLineSpacing;
+  }
 
-  ctx.font = '700 11px -apple-system, sans-serif';
-  ctx.fillStyle = '#0284C7';
-  ctx.fillText(`Chave PIX (${pixType}): ${pixKey}`, 285, 133);
+  // 2. Address & Location
+  const addrParts: string[] = [];
+  if (address) addrParts.push(address);
+  const locationParts: string[] = [];
+  if (city) locationParts.push(city);
+  if (state) locationParts.push(state);
+  if (zipCode) locationParts.push(`CEP: ${zipCode}`);
+  if (locationParts.length > 0) {
+    addrParts.push(locationParts.join(' - '));
+  }
+  if (addrParts.length > 0) {
+    ctx.font = '400 11px -apple-system, sans-serif';
+    ctx.fillStyle = '#64748B';
+    ctx.fillText(addrParts.join(', '), 285, currentCanvasY);
+    currentCanvasY += canvasLineSpacing;
+  }
+
+  // 3. Email & Website
+  const webParts: string[] = [];
+  if (email) webParts.push(`E-mail: ${email}`);
+  if (website) webParts.push(`Site: ${website}`);
+  if (webParts.length > 0) {
+    ctx.font = '500 11px -apple-system, sans-serif';
+    ctx.fillStyle = '#475569';
+    ctx.fillText(webParts.join(' • '), 285, currentCanvasY);
+    currentCanvasY += canvasLineSpacing;
+  }
+
+  // 4. PIX Key
+  if (pixKey) {
+    ctx.font = '700 11px -apple-system, sans-serif';
+    ctx.fillStyle = '#0284C7';
+    ctx.fillText(`Chave PIX (${pixType}): ${pixKey}`, 285, currentCanvasY);
+  }
+
+  ctx.restore();
 
   // Voucher Box
   const receiptNum = payment.receiptNumber || `REC-${Date.now()}`;
@@ -549,7 +671,7 @@ export async function renderReceiptDirectToCanvas(
 
   ctx.font = '800 12px -apple-system, sans-serif';
   ctx.fillStyle = '#64748B';
-  ctx.fillText('DADOS DO VEÍCULO & CONTRATO', 425, 278);
+  ctx.fillText('DADOS DO VEÍCULO', 425, 278);
 
   // License plate tag
   drawRoundRect(ctx, 425, 290, 130, 34, 6, '#0F172A');

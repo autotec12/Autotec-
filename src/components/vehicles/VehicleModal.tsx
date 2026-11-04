@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Vehicle, VehicleType, VehicleStatus } from '../../types';
 import { useData } from '../../context/DataContext';
-import { Car, X, Check, AlertCircle } from 'lucide-react';
+import { Car, X, Check, AlertCircle, Radio } from 'lucide-react';
 
 interface VehicleModalProps {
   vehicle?: Vehicle | null;
@@ -25,6 +25,8 @@ export const VehicleModal: React.FC<VehicleModalProps> = ({
   const [model, setModel] = useState(vehicle?.model || '');
   const [plate, setPlate] = useState(vehicle?.plate || '');
   const [color, setColor] = useState(vehicle?.color || '');
+  const [trackerModel, setTrackerModel] = useState(vehicle?.trackerModel || '');
+  const [trackerSerial, setTrackerSerial] = useState(vehicle?.trackerSerial || '');
   const [planDescription, setPlanDescription] = useState(vehicle?.planDescription || 'Rastreamento Veicular Mensal');
   const [monthlyValue, setMonthlyValue] = useState<string>(vehicle ? String(vehicle.monthlyValue) : '80');
   const [dueDay, setDueDay] = useState<string>(vehicle ? String(vehicle.dueDay) : '10');
@@ -64,6 +66,9 @@ export const VehicleModal: React.FC<VehicleModalProps> = ({
       const matchedPlan = planId ? plans.find((p) => p.id === planId) : null;
       const finalPlanName = matchedPlan ? matchedPlan.name : undefined;
 
+      const cleanTrackerModel = trackerModel.trim() || undefined;
+      const cleanTrackerSerial = trackerSerial.trim() || undefined;
+
       if (vehicle) {
         await updateVehicle(vehicle.id, {
           clientId,
@@ -72,6 +77,8 @@ export const VehicleModal: React.FC<VehicleModalProps> = ({
           model: model.trim(),
           plate: plate.toUpperCase().trim(),
           color: color.trim(),
+          trackerModel: cleanTrackerModel,
+          trackerSerial: cleanTrackerSerial,
           planId: planId || undefined,
           planName: finalPlanName,
           planDescription: planDescription.trim(),
@@ -90,6 +97,8 @@ export const VehicleModal: React.FC<VehicleModalProps> = ({
           model: model.trim(),
           plate: plate.toUpperCase().trim(),
           color: color.trim(),
+          trackerModel: cleanTrackerModel,
+          trackerSerial: cleanTrackerSerial,
           planId: planId || undefined,
           planName: finalPlanName,
           planDescription: planDescription.trim(),
@@ -245,7 +254,7 @@ export const VehicleModal: React.FC<VehicleModalProps> = ({
             </div>
             <div>
               <label className="block text-xs font-bold text-[#30334F] mb-1.5">
-                Modelo
+                Modelo do Veículo
               </label>
               <input
                 type="text"
@@ -255,6 +264,49 @@ export const VehicleModal: React.FC<VehicleModalProps> = ({
                 className="w-full bg-[#F8F9FA] border border-[#DCE0D9] rounded-xl px-3.5 py-2.5 text-sm text-[#1E2235] placeholder-slate-400 focus:outline-hidden focus:border-[#30334F] focus:bg-white"
               />
             </div>
+          </div>
+
+          {/* DADOS DO RASTREADOR (EQUIPAMENTO INSTALADO) */}
+          <div className="p-4 bg-[#F8F9FA] border border-[#DCE0D9] rounded-xl space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-black text-[#30334F] uppercase tracking-wider flex items-center gap-1.5">
+                <Radio className="w-4 h-4 text-[#F28C1B]" />
+                Dados do Rastreador Instalado (Opcional)
+              </span>
+              <span className="text-3xs font-bold px-2 py-0.5 rounded-full bg-slate-200 text-slate-700">
+                Equipamento
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-2xs font-bold text-slate-700 mb-1">
+                  Modelo do Rastreador
+                </label>
+                <input
+                  type="text"
+                  value={trackerModel}
+                  onChange={(e) => setTrackerModel(e.target.value)}
+                  placeholder="Ex: Suntech ST310U, Coban TK303"
+                  className="w-full bg-white border border-[#DCE0D9] rounded-lg px-3 py-2 text-xs text-[#1E2235] placeholder-slate-400 focus:outline-hidden focus:border-[#30334F]"
+                />
+              </div>
+              <div>
+                <label className="block text-2xs font-bold text-slate-700 mb-1">
+                  Número de Série (Serial)
+                </label>
+                <input
+                  type="text"
+                  value={trackerSerial}
+                  onChange={(e) => setTrackerSerial(e.target.value)}
+                  placeholder="Ex: 867542039182341"
+                  className="w-full bg-white border border-[#DCE0D9] rounded-lg px-3 py-2 text-xs font-mono text-[#1E2235] placeholder-slate-400 focus:outline-hidden focus:border-[#30334F]"
+                />
+              </div>
+            </div>
+            <p className="text-3xs text-slate-500">
+              Identificação técnica do equipamento instalado neste veículo para controle de estoque, ordens de serviço e suporte técnico.
+            </p>
           </div>
 
           {/* Plan Selector */}

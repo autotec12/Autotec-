@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
+import { useSecurity } from '../../context/SecurityContext';
 import {
   LayoutDashboard,
   Users,
@@ -15,6 +16,7 @@ import {
   Shield,
   Sparkles,
   Package,
+  Lock,
 } from 'lucide-react';
 
 interface NavigationProps {
@@ -23,7 +25,8 @@ interface NavigationProps {
 }
 
 export const Navigation: React.FC<NavigationProps> = ({ currentView, onNavigate }) => {
-  const { user, profile, isAdmin, logout } = useAuth();
+  const { user, profile, isAdmin } = useAuth();
+  const { lockSystem, logoutCompletely } = useSecurity();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [isInstallable, setIsInstallable] = useState(false);
@@ -122,21 +125,32 @@ export const Navigation: React.FC<NavigationProps> = ({ currentView, onNavigate 
               </button>
             )}
 
-            {/* User Profile Badge */}
-            <div className="flex items-center gap-2.5 pl-2 border-l border-white/15">
-              <div className="text-right hidden sm:block">
+            {/* Right Action: Lock System & User Profile */}
+            <div className="flex items-center gap-2 pl-2 border-l border-white/15">
+              {/* Botão Bloquear Sistema */}
+              <button
+                onClick={lockSystem}
+                title="Bloquear sistema agora (exigirá o PIN de 6 dígitos)"
+                className="px-2.5 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+              >
+                <Lock className="w-3.5 h-3.5 text-[#F28C1B]" />
+                <span className="hidden sm:inline">Bloquear</span>
+              </button>
+
+              <div className="text-right hidden sm:block pl-1">
                 <span className="text-xs font-semibold text-white block">
-                  {profile?.displayName || user?.displayName || 'Operador'}
+                  {profile?.displayName || 'Proprietário AUTOTEC'}
                 </span>
                 <span className="text-2xs font-mono uppercase text-[#F28C1B] font-bold">
-                  {isAdmin ? 'ADMINISTRADOR' : 'OPERADOR'}
+                  PROPRIETÁRIO
                 </span>
               </div>
 
+              {/* Botão Encerrar Sessão */}
               <button
-                onClick={logout}
-                title="Desconectar"
-                className="p-2 text-slate-300 hover:text-white hover:bg-white/10 rounded-xl transition cursor-pointer"
+                onClick={logoutCompletely}
+                title="Encerrar sessão completamente"
+                className="p-2 text-slate-300 hover:text-red-400 hover:bg-white/10 rounded-xl transition cursor-pointer"
               >
                 <LogOut className="w-4 h-4" />
               </button>
@@ -168,6 +182,30 @@ export const Navigation: React.FC<NavigationProps> = ({ currentView, onNavigate 
                 </button>
               );
             })}
+
+            {/* Mobile Lock & Logout */}
+            <div className="pt-2 border-t border-white/10 flex flex-col gap-1">
+              <button
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  lockSystem();
+                }}
+                className="w-full px-3 py-2.5 rounded-xl text-xs font-bold text-amber-300 hover:bg-white/10 flex items-center gap-3 transition cursor-pointer"
+              >
+                <Lock className="w-4 h-4 text-[#F28C1B]" />
+                Bloquear Sistema (PIN)
+              </button>
+              <button
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  logoutCompletely();
+                }}
+                className="w-full px-3 py-2.5 rounded-xl text-xs font-bold text-red-400 hover:bg-white/10 flex items-center gap-3 transition cursor-pointer"
+              >
+                <LogOut className="w-4 h-4" />
+                Encerrar Sessão
+              </button>
+            </div>
           </div>
         )}
       </header>

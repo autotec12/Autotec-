@@ -50,15 +50,19 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
   const [zoomLevel, setZoomLevel] = useState<number>(100);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'info' | 'error'; message: string } | null>(null);
 
+  const effectiveCompany = payment.companySnapshot
+    ? { ...companySettings, ...payment.companySnapshot }
+    : companySettings;
+
   const receiptContext: ReceiptContext = {
     payment,
     charge,
     client,
     vehicle,
-    company: companySettings,
+    company: effectiveCompany,
   };
 
-  const svgContent = generateReceiptSvg(payment, charge, client, vehicle, companySettings);
+  const svgContent = generateReceiptSvg(payment, charge, client, vehicle, effectiveCompany);
 
   const rawNumber = payment.receiptNumber || 'pagamento';
   const cleanNum = rawNumber.replace(/[^a-zA-Z0-9_-]/g, '_');

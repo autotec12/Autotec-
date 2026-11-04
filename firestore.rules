@@ -13,13 +13,13 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    function isVerified() {
-      return isSignedIn() && (request.auth.token.email_verified == true || request.auth.token.email == 'primecell435@gmail.com');
+    function isPrincipalAdmin() {
+      return isSignedIn() && request.auth.token.email.lower() == 'autotecrastreio@gmail.com';
     }
 
     function isAdmin() {
       return isSignedIn() && (
-        request.auth.token.email == 'primecell435@gmail.com' ||
+        isPrincipalAdmin() ||
         exists(/databases/$(database)/documents/admins/$(request.auth.uid))
       );
     }
@@ -42,36 +42,40 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
-    // Admins metadata collection
+    // Admins metadata collection (Write strictly restricted to Admins)
     match /admins/{adminId} {
       allow read: if isSignedIn();
       allow write: if isAdmin();
     }
 
-    // Company Settings
+    // Company Settings (Read by all logged users; Modified strictly by Admins)
     match /company_settings/{settingsId} {
       allow read: if isSignedIn();
-      allow create, update: if isSignedIn() && isValidId(settingsId) && incoming().companyName is string && incoming().companyName.size() <= 150;
-      allow delete: if isAdmin();
+      allow create, update, delete: if isAdmin() && isValidId(settingsId) &&
+        incoming().companyName is string && incoming().companyName.size() <= 150;
     }
 
-    // Users
+    // Users & Roles (RBAC: Operators cannot self-promote to Admin or alter active status)
     match /users/{userId} {
       allow read: if isSignedIn();
+      // Operators can create their own profile as 'operator'; Admins can create any profile
       allow create: if isSignedIn() && isValidId(userId) && (
-        request.auth.uid == userId || isAdmin()
-      );
-      allow update: if isSignedIn() && isValidId(userId) && (
-        (request.auth.uid == userId && !incoming().diff(existing()).affectedKeys().hasAny(['role'])) ||
+        (request.auth.uid == userId && (incoming().role == 'operator' || isAdmin())) ||
         isAdmin()
       );
-      allow delete: if isAdmin();
+      // Operators can update their profile (display name, photo) but CANNOT change role or active status
+      allow update: if isSignedIn() && isValidId(userId) && (
+        (request.auth.uid == userId && !incoming().diff(existing()).affectedKeys().hasAny(['role', 'active'])) ||
+        isAdmin()
+      );
+      // Only Admin can delete users (and cannot delete own profile)
+      allow delete: if isAdmin() && request.auth.uid != userId;
     }
 
-    // Plans
+    // Commercial Plans & Packages (Managed exclusively by Admins; Operators only view & assign)
     match /plans/{planId} {
       allow read: if isSignedIn();
-      allow create, update: if isSignedIn() && isValidId(planId) &&
+      allow create, update: if isAdmin() && isValidId(planId) &&
         incoming().name is string && incoming().name.size() > 0 && incoming().name.size() <= 150 &&
         incoming().totalMonthlyValue is number && incoming().totalMonthlyValue >= 0 &&
         incoming().status in ['ativo', 'inativo'];
@@ -107,7 +111,7 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
-    // Charges
+    // Charges (Financial Integrity: Base monthly value & vehicle/client binding are immutable)
     match /charges/{chargeId} {
       allow read: if isSignedIn();
       allow create: if isSignedIn() && isValidId(chargeId) &&
@@ -116,34 +120,35 @@ service cloud.firestore {
         incoming().totalAmount is number && incoming().totalAmount >= 0 &&
         incoming().status in ['pendente', 'parcial', 'pago', 'cancelado'];
       allow update: if isSignedIn() && isValidId(chargeId) &&
-        // originalMonthlyValue is strictly immutable
         incoming().originalMonthlyValue == existing().originalMonthlyValue &&
         incoming().clientId == existing().clientId &&
         incoming().vehicleId == existing().vehicleId &&
         incoming().totalAmount is number && incoming().remainingBalance is number &&
         incoming().status in ['pendente', 'parcial', 'pago', 'cancelado'];
-      allow delete: if isAdmin();
+      // Can only delete if NO payments have been received yet
+      allow delete: if isAdmin() && existing().paidAmount == 0;
     }
 
-    // Payments: Immutability invariant (NO delete, NO modification of historical amount)
+    // Payments: Immutability invariant (NO delete, NO modification of historical amounts)
     match /payments/{paymentId} {
       allow read: if isSignedIn();
       allow create: if isSignedIn() && isValidId(paymentId) &&
         incoming().chargeId is string && incoming().clientId is string &&
         incoming().amount is number && incoming().amount > 0 &&
         incoming().receiptNumber is string && incoming().receiptNumber.size() > 0 &&
-        incoming().operatorId is string;
+        incoming().operatorId == request.auth.uid;
       allow update: if false; // Payments are strictly immutable
       allow delete: if false; // Deleting payments is forbidden for financial integrity
     }
 
-    // Audit logs: Append-only
+    // Audit logs: Append-only forensic trail
     match /audit_logs/{logId} {
       allow read: if isSignedIn();
       allow create: if isSignedIn() && isValidId(logId) &&
-        incoming().action is string && incoming().operatorId is string;
+        incoming().action is string && incoming().action.size() > 0 &&
+        incoming().operatorId == request.auth.uid;
       allow update: if false; // Immutability
-      allow delete: if false; // No deletion of logs
+      allow delete: if false; // No deletion of logs under any circumstances
     }
   }
 }

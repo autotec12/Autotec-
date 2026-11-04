@@ -19,6 +19,7 @@ import {
   CheckCircle2,
   Clock,
   ShieldAlert,
+  Radio,
 } from 'lucide-react';
 
 export const VehiclesView: React.FC = () => {
@@ -67,11 +68,15 @@ export const VehiclesView: React.FC = () => {
     const client = clientsMap.get(v.clientId);
     const clientName = client?.name || '';
 
+    const term = searchTerm.toLowerCase().trim();
     const matchesSearch =
-      v.plate.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      v.model.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      v.brand.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      clientName.toLowerCase().includes(searchTerm.toLowerCase());
+      !term ||
+      v.plate.toLowerCase().includes(term) ||
+      v.model.toLowerCase().includes(term) ||
+      v.brand.toLowerCase().includes(term) ||
+      (v.trackerModel && v.trackerModel.toLowerCase().includes(term)) ||
+      (v.trackerSerial && v.trackerSerial.toLowerCase().includes(term)) ||
+      clientName.toLowerCase().includes(term);
 
     const matchesType = typeFilter === 'todos' || v.vehicleType === typeFilter;
     const matchesStatus = statusFilter === 'todos' || v.status === statusFilter;
@@ -183,7 +188,7 @@ export const VehiclesView: React.FC = () => {
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="Buscar por placa, cliente, marca ou modelo..."
+            placeholder="Buscar por placa, cliente, marca, modelo, rastreador ou serial..."
             className="w-full bg-[#F8F9FA] border border-[#DCE0D9] rounded-xl pl-10 pr-4 py-2 text-xs text-[#1E2235] placeholder-slate-400 focus:outline-hidden focus:border-[#30334F] focus:bg-white transition"
           />
         </div>
@@ -284,7 +289,7 @@ export const VehiclesView: React.FC = () => {
                         </div>
                       </td>
 
-                      {/* Model / Brand */}
+                      {/* Model / Brand / Tracker */}
                       <td className="px-4 py-3.5">
                         <div className="text-slate-800 font-semibold">
                           {vehicle.brand} {vehicle.model}
@@ -292,6 +297,15 @@ export const VehiclesView: React.FC = () => {
                         <div className="text-2xs text-slate-500">
                           {vehicle.color ? `Cor: ${vehicle.color}` : 'Cor padrão'}
                         </div>
+                        {(vehicle.trackerModel || vehicle.trackerSerial) && (
+                          <div className="mt-1.5 flex items-center gap-1.5 text-2xs font-medium text-[#30334F] bg-[#F3F4F2] px-2 py-0.5 rounded-md border border-[#DCE0D9] w-fit">
+                            <Radio className="w-3 h-3 text-[#F28C1B] shrink-0" />
+                            <span>
+                              {vehicle.trackerModel || 'Rastreador'}
+                              {vehicle.trackerSerial ? ` • Serial: ${vehicle.trackerSerial}` : ''}
+                            </span>
+                          </div>
+                        )}
                       </td>
 
                       {/* Monthly value & plan */}

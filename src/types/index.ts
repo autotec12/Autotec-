@@ -49,6 +49,8 @@ export interface Vehicle {
   model: string;
   plate: string;
   color: string;
+  trackerModel?: string; // Modelo do equipamento rastreador instalado
+  trackerSerial?: string; // Número de série do rastreador (Serial individual)
   planId?: string;
   planName?: string;
   planDescription: string;
@@ -102,6 +104,7 @@ export interface Payment {
   receiptNumber: string;
   remainingAfterPayment: number;
   notes?: string;
+  companySnapshot?: Partial<CompanySettings>;
   createdAt: string;
 }
 
@@ -109,13 +112,17 @@ export interface CompanySettings {
   id: string;
   companyName: string;
   tradeName?: string;
-  cnpj: string;
+  cnpj: string; // CNPJ ou CPF
   phone: string;
   whatsapp: string;
   email?: string;
+  address: string;
+  city?: string;
+  state?: string;
+  zipCode?: string; // CEP
+  website?: string;
   pixKey: string;
   pixKeyType: string;
-  address: string;
   receiptFooterMessage: string;
   logoSvg?: string;
   updatedAt?: string;

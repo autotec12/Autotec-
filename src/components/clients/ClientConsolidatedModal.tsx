@@ -14,6 +14,7 @@ import {
   MessageSquare,
   Package,
   PlusCircle,
+  Radio,
 } from 'lucide-react';
 import { openWhatsAppLink } from '../../lib/whatsapp';
 import { AssignPlanModal } from '../plans/AssignPlanModal';
@@ -271,6 +272,15 @@ export const ClientConsolidatedModal: React.FC<ClientConsolidatedModalProps> = (
                       <div className="text-2xs text-[#5F647E]">
                         Plano: <span className="text-[#1E2235] font-semibold">{v.planDescription || 'Rastreamento Padrão'}</span>
                       </div>
+                      {(v.trackerModel || v.trackerSerial) && (
+                        <div className="text-3xs text-slate-700 flex items-center gap-1 font-medium bg-[#F8F9FA] px-1.5 py-0.5 rounded border border-[#E2E4E0] w-fit">
+                          <Radio className="w-3 h-3 text-[#F28C1B] shrink-0" />
+                          <span>
+                            {v.trackerModel || 'Rastreador'}
+                            {v.trackerSerial ? ` • Serial: ${v.trackerSerial}` : ''}
+                          </span>
+                        </div>
+                      )}
                       <div className="text-2xs text-[#5F647E]">
                         Vencimento: <strong className="text-[#30334F]">Dia {v.dueDay}</strong> de cada mês
                       </div>

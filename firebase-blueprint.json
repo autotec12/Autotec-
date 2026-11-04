@@ -65,6 +65,8 @@
         "model": { "type": "string", "maxLength": 100 },
         "plate": { "type": "string", "maxLength": 15 },
         "color": { "type": "string", "maxLength": 50 },
+        "trackerModel": { "type": "string", "maxLength": 100 },
+        "trackerSerial": { "type": "string", "maxLength": 100 },
         "planDescription": { "type": "string", "maxLength": 150 },
         "monthlyValue": { "type": "number" },
         "dueDay": { "type": "number" },

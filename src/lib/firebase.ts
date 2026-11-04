@@ -1,13 +1,32 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut as fbSignOut } from 'firebase/auth';
+import {
+  getAuth,
+  GoogleAuthProvider,
+  signInWithPopup,
+  signInWithEmailAndPassword,
+  sendPasswordResetEmail,
+  signOut as fbSignOut,
+  setPersistence,
+  browserLocalPersistence,
+} from 'firebase/auth';
 import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 
-/* CRITICAL: The app will break without specifying firestoreDatabaseId */
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+/* Connect to (default) or specified Firestore Database */
+const databaseId = (firebaseConfig as any).firestoreDatabaseId;
+export const db = databaseId && databaseId !== '(default)'
+  ? getFirestore(app, databaseId)
+  : getFirestore(app);
+
 export const auth = getAuth(app);
+
+// Guarantee persistent session across browser tabs/reloads
+setPersistence(auth, browserLocalPersistence).catch((err) => {
+  console.warn('Session persistence notice:', err);
+});
+
 export const googleProvider = new GoogleAuthProvider();
 
 export enum OperationType {
@@ -89,4 +108,4 @@ export async function testFirestoreConnection() {
 // Initial connection test
 testFirestoreConnection();
 
-export { signInWithPopup, fbSignOut };
+export { signInWithPopup, signInWithEmailAndPassword, sendPasswordResetEmail, fbSignOut };

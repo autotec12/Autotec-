@@ -5,7 +5,8 @@
 
 import React, { useState } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
-import { DataProvider, useData } from './context/DataContext';
+import { SecurityProvider, useSecurity } from './context/SecurityContext';
+import { DataProvider } from './context/DataContext';
 import { Navigation } from './components/layout/Navigation';
 import { DashboardView } from './components/dashboard/DashboardView';
 import { ClientsView } from './components/clients/ClientsView';
@@ -16,10 +17,13 @@ import { ReceiptsListView } from './components/receipts/ReceiptsListView';
 import { ReportsView } from './components/reports/ReportsView';
 import { SettingsView } from './components/settings/SettingsView';
 import { LoginView } from './components/auth/LoginView';
+import { PinUnlockView } from './components/auth/PinUnlockView';
+import { PinSetupView } from './components/auth/PinSetupView';
 import { Loader2 } from 'lucide-react';
 
 function MainApp() {
   const { user, loading: authLoading } = useAuth();
+  const { isUnlocked, hasPinSetup, isCheckingPin } = useSecurity();
   
   // Persist active view in localStorage so the screen NEVER resets back to dashboard unexpectedly
   const [currentView, setCurrentView] = useState<string>(() => {
@@ -44,7 +48,7 @@ function MainApp() {
     }
   };
 
-  if (authLoading) {
+  if (authLoading || (user && isCheckingPin)) {
     return (
       <div className="min-h-screen bg-[#F3F4F2] flex flex-col items-center justify-center p-4">
         <div className="w-16 h-16 rounded-2xl bg-white border border-[#E2E4E0] shadow-md flex items-center justify-center text-[#30334F] mb-4">
@@ -55,10 +59,22 @@ function MainApp() {
     );
   }
 
+  // Se não autenticado no Firebase -> Apresentar tela de E-mail e Senha
   if (!user) {
     return <LoginView />;
   }
 
+  // Primeiro acesso após login: Usuário não possui PIN cadastrado -> Cadastro obrigatório de 6 dígitos
+  if (hasPinSetup === false) {
+    return <PinSetupView />;
+  }
+
+  // Próximos acessos com sessão Firebase válida: Sistema bloqueado -> Solicita PIN de 6 dígitos
+  if (!isUnlocked) {
+    return <PinUnlockView />;
+  }
+
+  // Acesso liberado após autenticação no Firebase e validação criptográfica do PIN
   return (
     <div className="min-h-screen bg-[#F3F4F2] text-[#1E2235] flex flex-col selection:bg-[#F28C1B] selection:text-white">
       {/* Navigation Header */}
@@ -87,9 +103,11 @@ function MainApp() {
 export default function App() {
   return (
     <AuthProvider>
-      <DataProvider>
-        <MainApp />
-      </DataProvider>
+      <SecurityProvider>
+        <DataProvider>
+          <MainApp />
+        </DataProvider>
+      </SecurityProvider>
     </AuthProvider>
   );
 }
