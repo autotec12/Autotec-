@@ -1,0 +1,149 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net: Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && (request.auth.token.email_verified == true || request.auth.token.email == 'primecell435@gmail.com');
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == 'primecell435@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Test doc for connection health check
+    match /test/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Admins metadata collection
+    match /admins/{adminId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Company Settings
+    match /company_settings/{settingsId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(settingsId) && incoming().companyName is string && incoming().companyName.size() <= 150;
+      allow delete: if isAdmin();
+    }
+
+    // Users
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(userId) && (
+        request.auth.uid == userId || isAdmin()
+      );
+      allow update: if isSignedIn() && isValidId(userId) && (
+        (request.auth.uid == userId && !incoming().diff(existing()).affectedKeys().hasAny(['role'])) ||
+        isAdmin()
+      );
+      allow delete: if isAdmin();
+    }
+
+    // Plans
+    match /plans/{planId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(planId) &&
+        incoming().name is string && incoming().name.size() > 0 && incoming().name.size() <= 150 &&
+        incoming().totalMonthlyValue is number && incoming().totalMonthlyValue >= 0 &&
+        incoming().status in ['ativo', 'inativo'];
+      allow delete: if isAdmin();
+    }
+
+    // Clients
+    match /clients/{clientId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(clientId) &&
+        incoming().name is string && incoming().name.size() > 0 && incoming().name.size() <= 150 &&
+        incoming().status in ['ativo', 'inativo'];
+      allow update: if isSignedIn() && isValidId(clientId) &&
+        incoming().name is string && incoming().name.size() > 0 && incoming().name.size() <= 150 &&
+        incoming().status in ['ativo', 'inativo'];
+      allow delete: if isAdmin();
+    }
+
+    // Vehicles
+    match /vehicles/{vehicleId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(vehicleId) &&
+        incoming().clientId is string && incoming().clientId.size() > 0 &&
+        incoming().plate is string && incoming().plate.size() > 0 && incoming().plate.size() <= 15 &&
+        incoming().vehicleType in ['carro', 'moto', 'caminhao', 'outro'] &&
+        incoming().monthlyValue is number && incoming().monthlyValue >= 0 &&
+        incoming().status in ['ativo', 'suspenso', 'cancelado'];
+      allow update: if isSignedIn() && isValidId(vehicleId) &&
+        incoming().clientId is string && incoming().clientId.size() > 0 &&
+        incoming().plate is string && incoming().plate.size() > 0 && incoming().plate.size() <= 15 &&
+        incoming().monthlyValue is number && incoming().monthlyValue >= 0 &&
+        incoming().status in ['ativo', 'suspenso', 'cancelado'];
+      allow delete: if isAdmin();
+    }
+
+    // Charges
+    match /charges/{chargeId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(chargeId) &&
+        incoming().clientId is string && incoming().vehicleId is string &&
+        incoming().originalMonthlyValue is number && incoming().originalMonthlyValue >= 0 &&
+        incoming().totalAmount is number && incoming().totalAmount >= 0 &&
+        incoming().status in ['pendente', 'parcial', 'pago', 'cancelado'];
+      allow update: if isSignedIn() && isValidId(chargeId) &&
+        // originalMonthlyValue is strictly immutable
+        incoming().originalMonthlyValue == existing().originalMonthlyValue &&
+        incoming().clientId == existing().clientId &&
+        incoming().vehicleId == existing().vehicleId &&
+        incoming().totalAmount is number && incoming().remainingBalance is number &&
+        incoming().status in ['pendente', 'parcial', 'pago', 'cancelado'];
+      allow delete: if isAdmin();
+    }
+
+    // Payments: Immutability invariant (NO delete, NO modification of historical amount)
+    match /payments/{paymentId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(paymentId) &&
+        incoming().chargeId is string && incoming().clientId is string &&
+        incoming().amount is number && incoming().amount > 0 &&
+        incoming().receiptNumber is string && incoming().receiptNumber.size() > 0 &&
+        incoming().operatorId is string;
+      allow update: if false; // Payments are strictly immutable
+      allow delete: if false; // Deleting payments is forbidden for financial integrity
+    }
+
+    // Audit logs: Append-only
+    match /audit_logs/{logId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(logId) &&
+        incoming().action is string && incoming().operatorId is string;
+      allow update: if false; // Immutability
+      allow delete: if false; // No deletion of logs
+    }
+  }
+}

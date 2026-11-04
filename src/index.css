@@ -1,0 +1,245 @@
+@import "tailwindcss";
+
+@theme {
+  --color-autotec-navy: #30334F;
+  --color-autotec-navy-dark: #222538;
+  --color-autotec-navy-light: #424669;
+  --color-autotec-orange: #F28C1B;
+  --color-autotec-orange-hover: #DE7B0E;
+  --color-autotec-orange-light: #FFF5EB;
+  --color-autotec-bg: #F3F4F2;
+  --color-autotec-card: #FFFFFF;
+  --color-autotec-border: #E2E4E0;
+  --color-autotec-border-dark: #D1D4CE;
+  --color-autotec-text: #1E2235;
+  --color-autotec-muted: #5F647E;
+}
+
+:root {
+  --autotec-navy: #30334F;
+  --autotec-navy-dark: #222538;
+  --autotec-navy-light: #424669;
+  --autotec-orange: #F28C1B;
+  --autotec-orange-hover: #DE7B0E;
+  --autotec-orange-light: #FFF5EB;
+  --autotec-bg: #F3F4F2;
+  --autotec-card: #FFFFFF;
+  --autotec-border: #E2E4E0;
+  --autotec-text: #1E2235;
+  --autotec-muted: #5F647E;
+}
+
+/* Universal Page & Layout Classes */
+body {
+  background-color: var(--autotec-bg);
+  color: var(--autotec-text);
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+}
+
+/* Card container standard */
+.autotec-card {
+  background-color: #FFFFFF;
+  border: 1px solid #E2E4E0;
+  border-radius: 1rem;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.04), 0 1px 2px -1px rgba(0, 0, 0, 0.04);
+}
+
+/* Input & Form Control standard */
+.autotec-input {
+  background-color: #FFFFFF;
+  border: 1px solid #D5D8D2;
+  color: #1E2235;
+  border-radius: 0.75rem;
+  padding: 0.5rem 0.875rem;
+  font-size: 0.8125rem;
+  transition: border-color 150ms, box-shadow 150ms;
+}
+
+.autotec-input:focus {
+  outline: none;
+  border-color: #30334F;
+  box-shadow: 0 0 0 3px rgba(48, 51, 79, 0.12);
+}
+
+.autotec-input::placeholder {
+  color: #9499B0;
+}
+
+/* Primary Institutional Button (Navy) */
+.autotec-btn-navy {
+  background-color: #30334F;
+  color: #FFFFFF;
+  border-radius: 0.75rem;
+  font-weight: 600;
+  font-size: 0.8125rem;
+  padding: 0.5rem 1rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  transition: all 150ms ease;
+  box-shadow: 0 1px 2px 0 rgba(48, 51, 79, 0.2);
+  cursor: pointer;
+}
+
+.autotec-btn-navy:hover {
+  background-color: #222538;
+  transform: translateY(-1px);
+}
+
+.autotec-btn-navy:active {
+  transform: translateY(0);
+}
+
+.autotec-btn-navy:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* Action Highlight Button (Orange) */
+.autotec-btn-orange {
+  background-color: #F28C1B;
+  color: #FFFFFF;
+  border-radius: 0.75rem;
+  font-weight: 700;
+  font-size: 0.8125rem;
+  padding: 0.5rem 1rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  transition: all 150ms ease;
+  box-shadow: 0 1px 3px 0 rgba(242, 140, 27, 0.3);
+  cursor: pointer;
+}
+
+.autotec-btn-orange:hover {
+  background-color: #DE7B0E;
+  transform: translateY(-1px);
+}
+
+.autotec-btn-orange:active {
+  transform: translateY(0);
+}
+
+.autotec-btn-orange:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* Secondary / Outline Button */
+.autotec-btn-secondary {
+  background-color: #FFFFFF;
+  color: #30334F;
+  border: 1px solid #D5D8D2;
+  border-radius: 0.75rem;
+  font-weight: 600;
+  font-size: 0.8125rem;
+  padding: 0.5rem 1rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  transition: all 150ms ease;
+  cursor: pointer;
+}
+
+.autotec-btn-secondary:hover {
+  background-color: #F8F9FA;
+  border-color: #30334F;
+  color: #222538;
+}
+
+/* Positive / Success Button */
+.autotec-btn-emerald {
+  background-color: #059669;
+  color: #FFFFFF;
+  border-radius: 0.75rem;
+  font-weight: 600;
+  font-size: 0.8125rem;
+  padding: 0.5rem 1rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  transition: all 150ms ease;
+  cursor: pointer;
+}
+
+.autotec-btn-emerald:hover {
+  background-color: #047857;
+}
+
+/* Table header styling */
+.autotec-thead {
+  background-color: #F8F9FA;
+  color: #5F647E;
+  font-weight: 700;
+  font-size: 0.75rem;
+  border-bottom: 1px solid #E2E4E0;
+}
+
+/* Table row styling */
+.autotec-tr {
+  border-bottom: 1px solid #EDF0EC;
+  transition: background-color 150ms;
+}
+
+.autotec-tr:hover {
+  background-color: #F9FAF8;
+}
+
+/* Badge styles */
+.badge-autotec-orange {
+  background-color: #FFF5EB;
+  color: #C86905;
+  border: 1px solid #FCD9B3;
+  border-radius: 9999px;
+  font-weight: 700;
+  font-size: 0.6875rem;
+  padding: 0.125rem 0.625rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.badge-autotec-navy {
+  background-color: #EAEBF2;
+  color: #30334F;
+  border: 1px solid #D4D6E4;
+  border-radius: 9999px;
+  font-weight: 700;
+  font-size: 0.6875rem;
+  padding: 0.125rem 0.625rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.badge-autotec-green {
+  background-color: #ECFDF5;
+  color: #065F46;
+  border: 1px solid #A7F3D0;
+  border-radius: 9999px;
+  font-weight: 700;
+  font-size: 0.6875rem;
+  padding: 0.125rem 0.625rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.badge-autotec-red {
+  background-color: #FEF2F2;
+  color: #991B1B;
+  border: 1px solid #FECACA;
+  border-radius: 9999px;
+  font-weight: 700;
+  font-size: 0.6875rem;
+  padding: 0.125rem 0.625rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}

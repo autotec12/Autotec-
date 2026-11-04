@@ -1,0 +1,6 @@
+{
+  "name": "sparkRastreioFin",
+  "description": "Sistema profissional de gestão financeira de mensalidades e recebimentos para empresas de rastreamento veicular.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

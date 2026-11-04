@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0B132B" />
+      <stop offset="50%" stop-color="#1C2541" />
+      <stop offset="100%" stop-color="#0A1128" />
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8" />
+      <stop offset="100%" stop-color="#2563EB" />
+    </linearGradient>
+    <linearGradient id="glow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10B981" />
+      <stop offset="100%" stop-color="#059669" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="110" fill="url(#bg)" />
+  <circle cx="256" cy="256" r="180" stroke="#334155" stroke-width="6" fill="none" opacity="0.4" />
+  <circle cx="256" cy="256" r="130" stroke="#3b82f6" stroke-width="4" stroke-dasharray="12 12" fill="none" opacity="0.6" />
+  
+  <!-- Financial Shield / Emblem -->
+  <path d="M256 100 L370 150 V260 C370 335 320 395 256 420 C192 395 142 335 142 260 V150 Z" fill="url(#accent)" opacity="0.15" />
+  <path d="M256 100 L370 150 V260 C370 335 320 395 256 420 C192 395 142 335 142 260 V150 Z" stroke="url(#accent)" stroke-width="12" fill="none" />
+  
+  <!-- Dollar / Cifrão & Spark -->
+  <text x="256" y="295" font-family="system-ui, -apple-system, sans-serif" font-size="160" font-weight="900" fill="#38BDF8" text-anchor="middle">R$</text>
+  
+  <!-- Sparkle badge -->
+  <circle cx="360" cy="150" r="24" fill="url(#glow)" />
+  <path d="M360 138 V162 M348 150 H372" stroke="#FFFFFF" stroke-width="5" stroke-linecap="round" />
+</svg>

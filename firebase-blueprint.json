@@ -1,0 +1,208 @@
+{
+  "entities": {
+    "CompanySettings": {
+      "title": "CompanySettings",
+      "description": "Configurações institucionais da empresa emissora",
+      "type": "object",
+      "properties": {
+        "companyName": { "type": "string", "maxLength": 150 },
+        "tradeName": { "type": "string", "maxLength": 150 },
+        "cnpj": { "type": "string", "maxLength": 30 },
+        "phone": { "type": "string", "maxLength": 30 },
+        "whatsapp": { "type": "string", "maxLength": 30 },
+        "email": { "type": "string", "maxLength": 120 },
+        "pixKey": { "type": "string", "maxLength": 100 },
+        "pixKeyType": { "type": "string", "maxLength": 30 },
+        "address": { "type": "string", "maxLength": 250 },
+        "receiptFooterMessage": { "type": "string", "maxLength": 500 },
+        "logoSvg": { "type": "string", "maxLength": 50000 },
+        "updatedAt": { "type": "string" },
+        "updatedBy": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["companyName", "cnpj", "phone"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Perfil de operador ou administrador do sistema",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "maxLength": 120 },
+        "displayName": { "type": "string", "maxLength": 120 },
+        "role": { "type": "string", "enum": ["admin", "operator"] },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["email", "displayName", "role", "active"]
+    },
+    "Client": {
+      "title": "Client",
+      "description": "Cliente tomador do serviço de rastreamento",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "maxLength": 150 },
+        "document": { "type": "string", "maxLength": 30 },
+        "phone": { "type": "string", "maxLength": 30 },
+        "whatsapp": { "type": "string", "maxLength": 30 },
+        "email": { "type": "string", "maxLength": 120 },
+        "address": { "type": "string", "maxLength": 250 },
+        "notes": { "type": "string", "maxLength": 1000 },
+        "status": { "type": "string", "enum": ["ativo", "inativo"] },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "createdBy": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["name", "whatsapp", "status"]
+    },
+    "Vehicle": {
+      "title": "Vehicle",
+      "description": "Veículo associado ao contrato de rastreamento e identificador financeiro",
+      "type": "object",
+      "properties": {
+        "clientId": { "type": "string", "maxLength": 128 },
+        "vehicleType": { "type": "string", "enum": ["carro", "moto", "caminhao", "outro"] },
+        "brand": { "type": "string", "maxLength": 80 },
+        "model": { "type": "string", "maxLength": 100 },
+        "plate": { "type": "string", "maxLength": 15 },
+        "color": { "type": "string", "maxLength": 50 },
+        "planDescription": { "type": "string", "maxLength": 150 },
+        "monthlyValue": { "type": "number" },
+        "dueDay": { "type": "number" },
+        "contractStartDate": { "type": "string", "maxLength": 20 },
+        "notes": { "type": "string", "maxLength": 1000 },
+        "status": { "type": "string", "enum": ["ativo", "suspenso", "cancelado"] },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "createdBy": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["clientId", "vehicleType", "plate", "monthlyValue", "dueDay", "status"]
+    },
+    "Charge": {
+      "title": "Charge",
+      "description": "Cobrança mensal recorrente de um veículo/contrato",
+      "type": "object",
+      "properties": {
+        "clientId": { "type": "string", "maxLength": 128 },
+        "clientName": { "type": "string", "maxLength": 150 },
+        "vehicleId": { "type": "string", "maxLength": 128 },
+        "vehiclePlate": { "type": "string", "maxLength": 15 },
+        "vehicleModel": { "type": "string", "maxLength": 100 },
+        "referenceMonth": { "type": "string", "maxLength": 10 },
+        "originalMonthlyValue": { "type": "number" },
+        "previousBalanceCarried": { "type": "number" },
+        "discount": { "type": "number" },
+        "addition": { "type": "number" },
+        "totalAmount": { "type": "number" },
+        "paidAmount": { "type": "number" },
+        "remainingBalance": { "type": "number" },
+        "dueDate": { "type": "string", "maxLength": 15 },
+        "status": { "type": "string", "enum": ["pendente", "parcial", "pago", "cancelado"] },
+        "balanceHandling": { "type": "string", "enum": ["none", "next_month", "specific_date", "open_negotiation"] },
+        "balanceScheduledDate": { "type": "string", "maxLength": 15 },
+        "notes": { "type": "string", "maxLength": 1000 },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "createdBy": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["clientId", "vehicleId", "referenceMonth", "originalMonthlyValue", "totalAmount", "remainingBalance", "dueDate", "status"]
+    },
+    "Payment": {
+      "title": "Payment",
+      "description": "Registro financeiro de recebimento integral ou parcial",
+      "type": "object",
+      "properties": {
+        "chargeId": { "type": "string", "maxLength": 128 },
+        "clientId": { "type": "string", "maxLength": 128 },
+        "clientName": { "type": "string", "maxLength": 150 },
+        "vehicleId": { "type": "string", "maxLength": 128 },
+        "vehiclePlate": { "type": "string", "maxLength": 15 },
+        "amount": { "type": "number" },
+        "paymentDate": { "type": "string", "maxLength": 30 },
+        "paymentMethod": { "type": "string", "enum": ["pix", "dinheiro", "cartao_credito", "cartao_debito", "boleto", "transferencia"] },
+        "operatorId": { "type": "string", "maxLength": 128 },
+        "operatorName": { "type": "string", "maxLength": 120 },
+        "receiptNumber": { "type": "string", "maxLength": 50 },
+        "remainingAfterPayment": { "type": "number" },
+        "notes": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["chargeId", "clientId", "amount", "paymentDate", "paymentMethod", "operatorId", "receiptNumber"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Registro de auditoria de operações críticas e alterações financeiras",
+      "type": "object",
+      "properties": {
+        "action": { "type": "string", "maxLength": 50 },
+        "entity": { "type": "string", "maxLength": 50 },
+        "entityId": { "type": "string", "maxLength": 128 },
+        "operatorId": { "type": "string", "maxLength": 128 },
+        "operatorEmail": { "type": "string", "maxLength": 120 },
+        "details": { "type": "string", "maxLength": 1000 },
+        "timestamp": { "type": "string" }
+      },
+      "required": ["action", "entity", "operatorId", "timestamp"]
+    },
+    "Plan": {
+      "title": "Plan",
+      "description": "Planos e pacotes de veículos com preços mensais personalizados",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "maxLength": 120 },
+        "description": { "type": "string", "maxLength": 500 },
+        "composition": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "vehicleType": { "type": "string", "enum": ["carro", "moto", "caminhao", "outro"] },
+              "count": { "type": "number" },
+              "unitValue": { "type": "number" }
+            },
+            "required": ["vehicleType", "count", "unitValue"]
+          }
+        },
+        "totalMonthlyValue": { "type": "number" },
+        "status": { "type": "string", "enum": ["ativo", "inativo"] },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "createdBy": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["name", "composition", "totalMonthlyValue", "status"]
+    }
+  },
+  "firestore": {
+    "/company_settings/{settingsId}": {
+      "schema": { "$ref": "CompanySettings" },
+      "description": "Configurações institucionais da empresa de rastreamento"
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "UserProfile" },
+      "description": "Perfis de usuários, operadores e administradores"
+    },
+    "/plans/{planId}": {
+      "schema": { "$ref": "Plan" },
+      "description": "Planos e pacotes de mensalidades e composição veicular"
+    },
+    "/clients/{clientId}": {
+      "schema": { "$ref": "Client" },
+      "description": "Clientes titulares dos contratos"
+    },
+    "/vehicles/{vehicleId}": {
+      "schema": { "$ref": "Vehicle" },
+      "description": "Veículos vinculados aos clientes e bases de faturamento"
+    },
+    "/charges/{chargeId}": {
+      "schema": { "$ref": "Charge" },
+      "description": "Cobranças e mensalidades recorrentes geradas"
+    },
+    "/payments/{paymentId}": {
+      "schema": { "$ref": "Payment" },
+      "description": "Registros de recebimentos efetuados"
+    },
+    "/audit_logs/{logId}": {
+      "schema": { "$ref": "AuditLog" },
+      "description": "Trilha imutável de auditoria"
+    }
+  }
+}
