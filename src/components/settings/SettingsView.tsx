@@ -3,6 +3,7 @@ import { useData } from '../../context/DataContext';
 import { useAuth, OFFICIAL_ADMIN_EMAIL } from '../../context/AuthContext';
 import { useSecurity } from '../../context/SecurityContext';
 import { formatDateTime } from '../../lib/calculations';
+import { AppInstallSection } from './AppInstallSection';
 import {
   Settings,
   Building,
@@ -20,6 +21,7 @@ import {
   EyeOff,
   Clock,
   ShieldCheck,
+  Smartphone,
 } from 'lucide-react';
 
 export const SettingsView: React.FC = () => {
@@ -47,7 +49,7 @@ export const SettingsView: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [seeding, setSeeding] = useState(false);
-  const [activeTab, setActiveTab] = useState<'empresa' | 'auditoria' | 'seguranca'>('empresa');
+  const [activeTab, setActiveTab] = useState<'empresa' | 'seguranca' | 'instalacao' | 'auditoria'>('empresa');
 
   // Segurança: Alteração de Senha
   const [currentPassword, setCurrentPassword] = useState('');
@@ -187,6 +189,18 @@ export const SettingsView: React.FC = () => {
         >
           <ShieldCheck className="w-4 h-4 text-[#F28C1B]" />
           Segurança, PIN &amp; Senha
+        </button>
+
+        <button
+          onClick={() => setActiveTab('instalacao')}
+          className={`pb-3 flex items-center gap-2 transition border-b-2 cursor-pointer ${
+            activeTab === 'instalacao'
+              ? 'border-[#30334F] text-[#30334F]'
+              : 'border-transparent text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <Smartphone className="w-4 h-4 text-[#F28C1B]" />
+          Instalar Aplicativo AUTOTEC
         </button>
 
         <button
@@ -937,6 +951,9 @@ export const SettingsView: React.FC = () => {
           )}
         </div>
       )}
+
+      {/* TAB 4: INSTALAR APLICATIVO AUTOTEC (PWA) */}
+      {activeTab === 'instalacao' && <AppInstallSection />}
     </div>
   );
 };

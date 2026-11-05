@@ -171,6 +171,47 @@
         "createdBy": { "type": "string", "maxLength": 128 }
       },
       "required": ["name", "composition", "totalMonthlyValue", "status"]
+    },
+    "TechnicalServiceOrder": {
+      "title": "TechnicalServiceOrder",
+      "description": "Ordem de serviço técnico (Instalação, Retirada, Manutenção, Reinstalação)",
+      "type": "object",
+      "properties": {
+        "orderNumber": { "type": "string", "maxLength": 50 },
+        "date": { "type": "string", "maxLength": 15 },
+        "clientId": { "type": "string", "maxLength": 128 },
+        "clientName": { "type": "string", "maxLength": 150 },
+        "vehicleId": { "type": "string", "maxLength": 128 },
+        "vehiclePlate": { "type": "string", "maxLength": 15 },
+        "totalAmount": { "type": "number" },
+        "paidAmount": { "type": "number" },
+        "remainingBalance": { "type": "number" },
+        "paymentMethod": { "type": "string", "enum": ["dinheiro", "pix"] },
+        "status": { "type": "string", "enum": ["pendente", "parcial", "pago"] },
+        "receiptNumber": { "type": "string", "maxLength": 50 },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["orderNumber", "date", "clientId", "vehicleId", "totalAmount", "status"]
+    },
+    "CompanyExpense": {
+      "title": "CompanyExpense",
+      "description": "Operação de despesa ou compra de suprimentos da empresa",
+      "type": "object",
+      "properties": {
+        "expenseNumber": { "type": "string", "maxLength": 50 },
+        "voucherNumber": { "type": "string", "maxLength": 50 },
+        "date": { "type": "string", "maxLength": 15 },
+        "supplier": { "type": "string", "maxLength": 150 },
+        "operationDescription": { "type": "string", "maxLength": 250 },
+        "totalAmount": { "type": "number" },
+        "paidAmount": { "type": "number" },
+        "paymentMethod": { "type": "string", "enum": ["dinheiro", "pix"] },
+        "status": { "type": "string", "enum": ["pago", "pendente", "parcial"] },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["expenseNumber", "voucherNumber", "date", "totalAmount", "status"]
     }
   },
   "firestore": {
@@ -201,6 +242,14 @@
     "/payments/{paymentId}": {
       "schema": { "$ref": "Payment" },
       "description": "Registros de recebimentos efetuados"
+    },
+    "/technical_services/{serviceId}": {
+      "schema": { "$ref": "TechnicalServiceOrder" },
+      "description": "Ordens de serviços técnicos executados"
+    },
+    "/company_expenses/{expenseId}": {
+      "schema": { "$ref": "CompanyExpense" },
+      "description": "Despesas e compras operacionais da empresa"
     },
     "/audit_logs/{logId}": {
       "schema": { "$ref": "AuditLog" },

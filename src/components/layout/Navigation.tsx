@@ -13,10 +13,11 @@ import {
   Download,
   Menu,
   X,
-  Shield,
-  Sparkles,
   Package,
   Lock,
+  Wrench,
+  ShoppingBag,
+  TrendingUp,
 } from 'lucide-react';
 
 interface NavigationProps {
@@ -25,7 +26,7 @@ interface NavigationProps {
 }
 
 export const Navigation: React.FC<NavigationProps> = ({ currentView, onNavigate }) => {
-  const { user, profile, isAdmin } = useAuth();
+  const { profile } = useAuth();
   const { lockSystem, logoutCompletely } = useSecurity();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
@@ -53,13 +54,17 @@ export const Navigation: React.FC<NavigationProps> = ({ currentView, onNavigate 
     setDeferredPrompt(null);
   };
 
+  // Official Menu Items in pristine Portuguese with notranslate protection
   const navItems = [
+    { id: 'general_management', label: 'Gestão Geral', icon: TrendingUp },
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'clients', label: 'Clientes', icon: Users },
     { id: 'vehicles', label: 'Veículos & Contratos', icon: Car },
     { id: 'plans', label: 'Planos', icon: Package },
     { id: 'billing', label: 'Mensalidades', icon: Receipt },
-    { id: 'receipts', label: 'Recibos SVG', icon: FileText },
+    { id: 'services', label: 'Serviços Técnicos', icon: Wrench },
+    { id: 'expenses', label: 'Gastos da Empresa', icon: ShoppingBag },
+    { id: 'receipts', label: 'Recibos & Comprovantes', icon: FileText },
     { id: 'reports', label: 'Relatórios', icon: BarChart3 },
     { id: 'settings', label: 'Configurações', icon: Settings },
   ];
@@ -67,32 +72,36 @@ export const Navigation: React.FC<NavigationProps> = ({ currentView, onNavigate 
   return (
     <>
       {/* Top Navbar */}
-      <header className="sticky top-0 z-40 bg-[#30334F] text-white border-b border-[#23253B] shadow-md">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          {/* Brand Logo */}
-          <div className="flex items-center gap-3">
+      <header
+        className="sticky top-0 z-40 bg-[#30334F] text-white border-b border-[#23253B] shadow-md select-none notranslate"
+        translate="no"
+      >
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-2">
+          {/* Brand Logo & Mobile Trigger */}
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="p-2 text-slate-300 hover:text-white rounded-lg md:hidden hover:bg-white/10 transition"
+              className="p-2 text-slate-300 hover:text-white rounded-lg lg:hidden hover:bg-white/10 transition cursor-pointer"
               aria-label="Menu Principal"
             >
               {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
             </button>
 
             <div
-              onClick={() => onNavigate('dashboard')}
+              onClick={() => onNavigate('general_management')}
               className="flex items-center gap-3 cursor-pointer group py-1"
+              title="AUTOTEC - Ir para Gestão Geral"
             >
               <img
                 src="/autotec-logo-header.png"
                 alt="AUTOTEC Rastreamento Veicular"
-                className="h-9 sm:h-10 w-auto max-w-[190px] sm:max-w-[220px] object-contain drop-shadow-sm group-hover:scale-[1.02] transition"
+                className="h-8 sm:h-9 w-auto max-w-[170px] sm:max-w-[200px] object-contain drop-shadow-sm group-hover:scale-[1.02] transition"
               />
             </div>
           </div>
 
           {/* Desktop Navigation Links */}
-          <nav className="hidden md:flex items-center gap-1">
+          <nav className="hidden lg:flex items-center gap-1 overflow-x-auto py-1">
             {navItems.map((item) => {
               const Icon = item.icon;
               const isActive = currentView === item.id;
@@ -100,34 +109,34 @@ export const Navigation: React.FC<NavigationProps> = ({ currentView, onNavigate 
                 <button
                   key={item.id}
                   onClick={() => onNavigate(item.id)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-2 transition cursor-pointer ${
+                  translate="no"
+                  className={`px-2.5 py-1.5 rounded-xl text-2xs xl:text-xs font-semibold flex items-center gap-1.5 transition whitespace-nowrap cursor-pointer notranslate ${
                     isActive
                       ? 'bg-[#F28C1B] text-white shadow-xs font-bold'
                       : 'text-slate-200 hover:text-white hover:bg-white/10'
                   }`}
                 >
-                  <Icon className="w-4 h-4" />
-                  {item.label}
+                  <Icon className="w-3.5 h-3.5 shrink-0" />
+                  <span translate="no" className="notranslate">{item.label}</span>
                 </button>
               );
             })}
           </nav>
 
           {/* Right Action: PWA Install & User Info */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 shrink-0">
             {isInstallable && (
               <button
                 onClick={handleInstallClick}
-                className="px-3 py-1.5 bg-[#F28C1B] hover:bg-[#DE7B0E] text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-xs cursor-pointer"
+                className="hidden sm:flex px-2.5 py-1.5 bg-[#F28C1B] hover:bg-[#DE7B0E] text-white rounded-xl text-2xs font-bold items-center gap-1 transition shadow-xs cursor-pointer"
               >
                 <Download className="w-3.5 h-3.5" />
                 Instalar PWA
               </button>
             )}
 
-            {/* Right Action: Lock System & User Profile */}
-            <div className="flex items-center gap-2 pl-2 border-l border-white/15">
-              {/* Botão Bloquear Sistema */}
+            {/* Lock System & User Profile */}
+            <div className="flex items-center gap-1.5 pl-2 border-l border-white/15">
               <button
                 onClick={lockSystem}
                 title="Bloquear sistema agora (exigirá o PIN de 6 dígitos)"
@@ -137,16 +146,15 @@ export const Navigation: React.FC<NavigationProps> = ({ currentView, onNavigate 
                 <span className="hidden sm:inline">Bloquear</span>
               </button>
 
-              <div className="text-right hidden sm:block pl-1">
-                <span className="text-xs font-semibold text-white block">
-                  {profile?.displayName || 'Proprietário AUTOTEC'}
+              <div className="text-right hidden xl:block pl-1">
+                <span className="text-xs font-semibold text-white block truncate max-w-[140px]">
+                  {profile?.displayName || 'Proprietário'}
                 </span>
                 <span className="text-2xs font-mono uppercase text-[#F28C1B] font-bold">
                   PROPRIETÁRIO
                 </span>
               </div>
 
-              {/* Botão Encerrar Sessão */}
               <button
                 onClick={logoutCompletely}
                 title="Encerrar sessão completamente"
@@ -160,7 +168,7 @@ export const Navigation: React.FC<NavigationProps> = ({ currentView, onNavigate 
 
         {/* Mobile Dropdown Menu */}
         {mobileMenuOpen && (
-          <div className="md:hidden bg-[#262840] border-b border-[#23253B] px-4 py-3 space-y-1">
+          <div className="lg:hidden bg-[#262840] border-b border-[#23253B] px-4 py-3 space-y-1 max-h-[80vh] overflow-y-auto">
             {navItems.map((item) => {
               const Icon = item.icon;
               const isActive = currentView === item.id;
@@ -171,20 +179,30 @@ export const Navigation: React.FC<NavigationProps> = ({ currentView, onNavigate 
                     onNavigate(item.id);
                     setMobileMenuOpen(false);
                   }}
-                  className={`w-full px-3 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-3 transition cursor-pointer ${
+                  translate="no"
+                  className={`w-full px-3 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-3 transition cursor-pointer notranslate ${
                     isActive
                       ? 'bg-[#F28C1B] text-white font-bold shadow-xs'
                       : 'text-slate-200 hover:text-white hover:bg-white/10'
                   }`}
                 >
-                  <Icon className="w-4 h-4" />
-                  {item.label}
+                  <Icon className="w-4 h-4 shrink-0 text-[#F28C1B]" />
+                  <span translate="no" className="notranslate">{item.label}</span>
                 </button>
               );
             })}
 
             {/* Mobile Lock & Logout */}
             <div className="pt-2 border-t border-white/10 flex flex-col gap-1">
+              {isInstallable && (
+                <button
+                  onClick={handleInstallClick}
+                  className="w-full px-3 py-2.5 rounded-xl text-xs font-bold text-amber-300 hover:bg-white/10 flex items-center gap-3 transition cursor-pointer"
+                >
+                  <Download className="w-4 h-4" />
+                  Instalar Aplicativo PWA
+                </button>
+              )}
               <button
                 onClick={() => {
                   setMobileMenuOpen(false);
@@ -193,7 +211,7 @@ export const Navigation: React.FC<NavigationProps> = ({ currentView, onNavigate 
                 className="w-full px-3 py-2.5 rounded-xl text-xs font-bold text-amber-300 hover:bg-white/10 flex items-center gap-3 transition cursor-pointer"
               >
                 <Lock className="w-4 h-4 text-[#F28C1B]" />
-                Bloquear Sistema (PIN)
+                Bloquear Sistema (PIN de 6 dígitos)
               </button>
               <button
                 onClick={() => {

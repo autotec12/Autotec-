@@ -1,16 +1,14 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useSecurity } from '../../context/SecurityContext';
 import { useAuth, OFFICIAL_ADMIN_EMAIL } from '../../context/AuthContext';
 import {
   Lock,
-  Unlock,
   AlertCircle,
   Clock,
   LogOut,
   Delete,
   Eye,
   EyeOff,
-  ShieldCheck,
   Loader2,
 } from 'lucide-react';
 
@@ -24,76 +22,96 @@ export const PinUnlockView: React.FC = () => {
   const [verifying, setVerifying] = useState<boolean>(false);
   const [lockoutTimer, setLockoutTimer] = useState<number>(0);
 
-  // Manipulador do contador regressivo de lockout
+  // Synchronous ref to prevent stale closures and missed digits during rapid typing
+  const pinRef = useRef<string>('');
+  const isVerifyingRef = useRef<boolean>(false);
+  const lockoutRef = useRef<number>(0);
+
+  // Sync ref with lockout state
+  useEffect(() => {
+    lockoutRef.current = lockoutTimer;
+  }, [lockoutTimer]);
+
+  // Lockout countdown timer
   useEffect(() => {
     if (lockoutTimer <= 0) return;
     const interval = setInterval(() => {
-      setLockoutTimer((prev) => (prev > 0 ? prev - 1 : 0));
+      setLockoutTimer((prev) => {
+        const next = prev > 0 ? prev - 1 : 0;
+        lockoutRef.current = next;
+        return next;
+      });
     }, 1000);
     return () => clearInterval(interval);
   }, [lockoutTimer]);
 
-  const handleDigit = useCallback(
-    (digit: string) => {
-      if (lockoutTimer > 0 || verifying) return;
-      if (pin.length < 6) {
-        setError(null);
-        setPin((prev) => prev + digit);
-      }
-    },
-    [pin.length, lockoutTimer, verifying]
-  );
+  // Submit PIN function
+  const submitPin = async (pinValue: string) => {
+    if (pinValue.length !== 6 || isVerifyingRef.current || lockoutRef.current > 0) return;
 
-  const handleBackspace = useCallback(() => {
-    if (lockoutTimer > 0 || verifying) return;
-    setError(null);
-    setPin((prev) => prev.slice(0, -1));
-  }, [lockoutTimer, verifying]);
+    try {
+      isVerifyingRef.current = true;
+      setVerifying(true);
+      setError(null);
 
-  const handleClear = useCallback(() => {
-    if (lockoutTimer > 0 || verifying) return;
-    setError(null);
-    setPin('');
-  }, [lockoutTimer, verifying]);
+      const result = await unlockWithPin(pinValue);
 
-  // Submissão do PIN
-  const submitPin = useCallback(
-    async (pinToTest: string) => {
-      if (pinToTest.length !== 6 || verifying || lockoutTimer > 0) return;
-
-      try {
-        setVerifying(true);
-        setError(null);
-        const result = await unlockWithPin(pinToTest);
-
-        if (!result.success) {
-          setError(result.error || 'PIN incorreto. Tente novamente.');
-          setPin('');
-          if (result.lockoutSeconds && result.lockoutSeconds > 0) {
-            setLockoutTimer(result.lockoutSeconds);
-          }
-        }
-      } catch (err) {
-        setError('Erro ao validar o PIN.');
+      if (!result.success) {
+        setError(result.error || 'PIN incorreto. Tente novamente.');
+        pinRef.current = '';
         setPin('');
-      } finally {
-        setVerifying(false);
+        if (result.lockoutSeconds && result.lockoutSeconds > 0) {
+          setLockoutTimer(result.lockoutSeconds);
+          lockoutRef.current = result.lockoutSeconds;
+        }
       }
-    },
-    [unlockWithPin, verifying, lockoutTimer]
-  );
-
-  // Auto-submissão ao preencher o 6º dígito
-  useEffect(() => {
-    if (pin.length === 6) {
-      submitPin(pin);
+    } catch {
+      setError('Erro ao validar o PIN.');
+      pinRef.current = '';
+      setPin('');
+    } finally {
+      isVerifyingRef.current = false;
+      setVerifying(false);
     }
-  }, [pin, submitPin]);
+  };
 
-  // Suporte a teclado físico (números 0-9, Backspace e Escape)
+  // Immediate synchronous digit handler
+  const handleDigit = (digit: string) => {
+    if (lockoutRef.current > 0 || isVerifyingRef.current) return;
+    if (pinRef.current.length >= 6) return;
+
+    setError(null);
+    const nextPin = pinRef.current + digit;
+    pinRef.current = nextPin;
+    setPin(nextPin);
+
+    // If 6th digit was entered, immediately submit without waiting for state re-render
+    if (nextPin.length === 6) {
+      submitPin(nextPin);
+    }
+  };
+
+  // Immediate backspace handler
+  const handleBackspace = () => {
+    if (lockoutRef.current > 0 || isVerifyingRef.current) return;
+    setError(null);
+    const nextPin = pinRef.current.slice(0, -1);
+    pinRef.current = nextPin;
+    setPin(nextPin);
+  };
+
+  // Clear all digits
+  const handleClear = () => {
+    if (lockoutRef.current > 0 || isVerifyingRef.current) return;
+    setError(null);
+    pinRef.current = '';
+    setPin('');
+  };
+
+  // Physical keyboard listener
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (lockoutTimer > 0 || verifying) return;
+      if (lockoutRef.current > 0 || isVerifyingRef.current) return;
 
       if (/^[0-9]$/.test(e.key)) {
         e.preventDefault();
@@ -109,7 +127,7 @@ export const PinUnlockView: React.FC = () => {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleDigit, handleBackspace, handleClear, lockoutTimer, verifying]);
+  }, []);
 
   const formatTimer = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -119,11 +137,11 @@ export const PinUnlockView: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-[#F3F4F2] flex flex-col justify-center items-center p-4 relative overflow-hidden select-none">
-      {/* Glow de fundo */}
+      {/* Background glow */}
       <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-[#30334F]/5 rounded-full blur-3xl pointer-events-none" />
 
       <div className="w-full max-w-sm bg-white border border-[#E2E4E0] rounded-3xl p-6 sm:p-8 shadow-xl relative z-10 text-center space-y-6">
-        {/* Marca AUTOTEC */}
+        {/* Brand header */}
         <div className="flex flex-col items-center">
           <img
             src="/autotec-logo-original.png"
@@ -144,7 +162,7 @@ export const PinUnlockView: React.FC = () => {
           </p>
         </div>
 
-        {/* Alerta de Bloqueio Temporário (Lockout) */}
+        {/* Lockout banner */}
         {lockoutTimer > 0 && (
           <div className="p-3 bg-red-50 border border-red-200 rounded-2xl flex items-center gap-2.5 text-left text-xs text-red-800 animate-pulse">
             <Clock className="w-5 h-5 text-red-600 shrink-0" />
@@ -157,7 +175,7 @@ export const PinUnlockView: React.FC = () => {
           </div>
         )}
 
-        {/* Mensagem de Erro */}
+        {/* Error alert */}
         {error && lockoutTimer <= 0 && (
           <div className="p-3 bg-red-50 border border-red-200 rounded-xl flex items-center gap-2 text-left text-xs text-red-800">
             <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
@@ -165,7 +183,7 @@ export const PinUnlockView: React.FC = () => {
           </div>
         )}
 
-        {/* Indicadores Visuais dos 6 Dígitos */}
+        {/* 6 Dots Indicators */}
         <div className="space-y-2">
           <div className="flex items-center justify-center gap-3 py-2">
             {[0, 1, 2, 3, 4, 5].map((index) => {
@@ -173,7 +191,7 @@ export const PinUnlockView: React.FC = () => {
               return (
                 <div
                   key={index}
-                  className={`w-4 h-4 rounded-full transition-all duration-200 border-2 flex items-center justify-center ${
+                  className={`w-4 h-4 rounded-full transition-all duration-150 border-2 flex items-center justify-center ${
                     isFilled
                       ? 'bg-[#F28C1B] border-[#F28C1B] scale-110 shadow-sm shadow-orange-500/30'
                       : 'border-[#CBD5E1] bg-white'
@@ -189,59 +207,62 @@ export const PinUnlockView: React.FC = () => {
             })}
           </div>
 
-          {/* Botão de Exibir/Ocultar Dígitos */}
           <button
             type="button"
             onClick={() => setShowPin(!showPin)}
-            className="text-2xs text-slate-500 hover:text-[#30334F] font-semibold inline-flex items-center gap-1 transition"
+            className="text-2xs text-slate-500 hover:text-[#30334F] font-semibold inline-flex items-center gap-1 transition cursor-pointer"
           >
             {showPin ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
             {showPin ? 'Ocultar PIN' : 'Visualizar PIN digitado'}
           </button>
         </div>
 
-        {/* Teclado Numérico Virtual Moderno */}
-        <div className="grid grid-cols-3 gap-2.5 pt-1">
+        {/* High-Performance Responsive Numeric Keypad */}
+        <div className="grid grid-cols-3 gap-2.5 pt-1" style={{ touchAction: 'manipulation' }}>
           {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((digit) => (
             <button
               key={digit}
               type="button"
               disabled={lockoutTimer > 0 || verifying}
               onClick={() => handleDigit(digit)}
-              className="h-13 rounded-2xl bg-[#F8F9FA] hover:bg-[#EBECE8] active:scale-95 active:bg-[#DCE0D9] text-[#30334F] text-xl font-bold border border-[#E2E4E0] shadow-2xs transition flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+              className="h-13 rounded-2xl bg-[#F8F9FA] hover:bg-[#EBECE8] active:scale-95 active:bg-[#DCE0D9] text-[#30334F] text-xl font-bold border border-[#E2E4E0] shadow-2xs transition flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer select-none"
+              style={{ touchAction: 'manipulation' }}
             >
               {digit}
             </button>
           ))}
 
-          {/* Botão Limpar */}
+          {/* Button Clear */}
           <button
             type="button"
             disabled={lockoutTimer > 0 || verifying || pin.length === 0}
             onClick={handleClear}
             title="Limpar todos os dígitos (C)"
-            className="h-13 rounded-2xl bg-white hover:bg-slate-100 active:scale-95 text-slate-600 font-bold text-xs border border-[#E2E4E0] transition flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+            className="h-13 rounded-2xl bg-white hover:bg-slate-100 active:scale-95 text-slate-600 font-bold text-xs border border-[#E2E4E0] transition flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer select-none"
+            style={{ touchAction: 'manipulation' }}
           >
             LIMPAR
           </button>
 
-          {/* Dígito 0 */}
+          {/* Digit 0 */}
           <button
             type="button"
             disabled={lockoutTimer > 0 || verifying}
             onClick={() => handleDigit('0')}
-            className="h-13 rounded-2xl bg-[#F8F9FA] hover:bg-[#EBECE8] active:scale-95 active:bg-[#DCE0D9] text-[#30334F] text-xl font-bold border border-[#E2E4E0] shadow-2xs transition flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+            className="h-13 rounded-2xl bg-[#F8F9FA] hover:bg-[#EBECE8] active:scale-95 active:bg-[#DCE0D9] text-[#30334F] text-xl font-bold border border-[#E2E4E0] shadow-2xs transition flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer select-none"
+            style={{ touchAction: 'manipulation' }}
           >
             0
           </button>
 
-          {/* Botão Backspace */}
+          {/* Button Backspace */}
           <button
             type="button"
             disabled={lockoutTimer > 0 || verifying || pin.length === 0}
             onClick={handleBackspace}
             title="Apagar último dígito"
-            className="h-13 rounded-2xl bg-white hover:bg-slate-100 active:scale-95 text-slate-700 font-bold text-xs border border-[#E2E4E0] transition flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+            className="h-13 rounded-2xl bg-white hover:bg-slate-100 active:scale-95 text-slate-700 font-bold text-xs border border-[#E2E4E0] transition flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer select-none"
+            style={{ touchAction: 'manipulation' }}
           >
             <Delete className="w-5 h-5 text-slate-600" />
           </button>
@@ -254,12 +275,12 @@ export const PinUnlockView: React.FC = () => {
           </div>
         )}
 
-        {/* Rodapé: Encerrar Sessão / Esqueci o PIN */}
+        {/* Footer */}
         <div className="pt-2 border-t border-[#E2E4E0] flex flex-col gap-2">
           <button
             type="button"
             onClick={logoutCompletely}
-            className="text-xs text-slate-500 hover:text-red-600 font-semibold flex items-center justify-center gap-1.5 transition py-1"
+            className="text-xs text-slate-500 hover:text-red-600 font-semibold flex items-center justify-center gap-1.5 transition py-1 cursor-pointer"
           >
             <LogOut className="w-3.5 h-3.5" />
             Encerrar sessão completa

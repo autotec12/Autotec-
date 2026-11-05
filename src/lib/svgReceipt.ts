@@ -62,28 +62,37 @@ export function generateReceiptSvg(
   const pixType = effectiveCompany.pixKeyType || 'Chave PIX';
   const logoDataUri = effectiveCompany.logoSvg || AUTOTEC_LOGO_ORIGINAL_DATA_URI;
 
-  const clientName = client?.name || payment.clientName || 'Cliente';
+  // Resolve Client Info with robust fallbacks
+  const clientName = client?.name || payment.clientName || charge.clientName || 'Cliente';
   const clientDoc = client?.document || 'Não informado';
   const clientPhone = client?.whatsapp || client?.phone || 'Não informado';
 
-  const plate = vehicle?.plate || payment.vehiclePlate || 'ABC1D23';
+  // Resolve Vehicle Info
+  const plate = vehicle?.plate || payment.vehiclePlate || charge.vehiclePlate || 'Não informada';
   const vehicleInfo = vehicle
     ? `${vehicle.brand} ${vehicle.model} (${vehicle.color || 'Padrão'})`
     : (charge.vehicleModel || 'Veículo Contratado');
   const planName = vehicle?.planDescription || 'Plano de Rastreamento Veicular';
   const refMonth = charge.referenceMonth || 'Mensalidade Vigente';
 
-  const originalVal = formatCurrency(charge.originalMonthlyValue);
-  const paidVal = formatCurrency(payment.amount);
-  const remainingVal = formatCurrency(payment.remainingAfterPayment);
-  const totalChargeVal = formatCurrency(charge.totalAmount);
-  const hasRemaining = payment.remainingAfterPayment > 0.01;
+  // Resolve Financial Values with strict numeric conversion to prevent R$ 0,00
+  const rawOriginal = Number(charge.originalMonthlyValue ?? charge.totalAmount ?? payment.amount ?? 0);
+  const rawPrevBalance = Number(charge.previousBalanceCarried || 0);
+  const rawTotal = Number(charge.totalAmount || (rawOriginal + rawPrevBalance));
+  const rawPaid = Number(payment.amount || 0);
+  const rawRemaining = Number(payment.remainingAfterPayment ?? Math.max(0, rawTotal - rawPaid));
+
+  const originalVal = formatCurrency(rawOriginal);
+  const totalChargeVal = formatCurrency(rawTotal);
+  const paidVal = formatCurrency(rawPaid);
+  const remainingVal = formatCurrency(rawRemaining);
+  const hasRemaining = rawRemaining > 0.009;
 
   const dateFormatted = formatDateTime(payment.paymentDate || payment.createdAt);
   const operatorName = payment.operatorName || 'Operador Autorizado';
   const receiptNum = payment.receiptNumber || `REC-${Date.now()}`;
   const footerMsg = effectiveCompany.receiptFooterMessage || 'Agradecemos a confiança e preferência pelos serviços AUTOTEC!';
-  const methodText = PAYMENT_METHOD_LABELS[payment.paymentMethod] || payment.paymentMethod;
+  const methodText = PAYMENT_METHOD_LABELS[payment.paymentMethod] || payment.paymentMethod || 'PIX';
 
   // Build dynamic company lines (only displaying filled fields)
   const headerLinesSvg: string[] = [];
@@ -307,7 +316,9 @@ export function generateReceiptSvg(
   <text x="400" y="1035" font-size="11" fill="#E2E4E0" text-anchor="middle">AUTOTEC RASTREAMENTO VEICULAR • Gestão Financeira Especializada</text>
   <text x="400" y="1055" font-size="10" fill="#CBD5E1" text-anchor="middle">Documento emitido eletronicamente em formato vetorial SVG de alta definição • Válido como comprovante oficial de pagamento.</text>
   <line x1="200" y1="1068" x2="600" y2="1068" stroke="#464969" />
-  <text x="400" y="1080" font-size="9" fill="#F28C1B" text-anchor="middle" font-weight="bold">Suporte e Atendimento: ${escapeXml(whatsapp)} • ${escapeXml(company?.email || 'contato@autotec.com.br')}</text>
+  <text x="400" y="1080" font-size="9" fill="#F28C1B" text-anchor="middle" font-weight="bold">${escapeXml(
+    [whatsapp || phone ? `Suporte e Atendimento: ${whatsapp || phone}` : '', email || effectiveCompany.email || 'contato@autotec.com.br'].filter(Boolean).join(' • ')
+  )}</text>
 </svg>`;
 }
 
@@ -924,7 +935,8 @@ export async function renderReceiptDirectToCanvas(
 
   ctx.font = '500 9px -apple-system, sans-serif';
   ctx.fillStyle = '#F59E0B';
-  ctx.fillText(`Suporte e Atendimento: ${whatsapp} • ${company?.email || 'contato@autotec.com.br'}`, 400, 1082);
+  const canvasContact = [whatsapp ? `Suporte e Atendimento: ${whatsapp}` : '', effectiveCompany?.email || company?.email || 'contato@autotec.com.br'].filter(Boolean).join(' • ');
+  ctx.fillText(canvasContact, 400, 1082);
 
   // 8. Convert to PNG Blob
   return new Promise<Blob>((resolve, reject) => {
@@ -1235,47 +1247,30 @@ export async function downloadReceiptPng(
 }
 
 /**
- * Native Web Share API helper (shares PNG image or SVG file).
+ * Native Web Share API helper for vector SVG files.
  */
 export async function shareReceipt(
   svgContent: string,
-  title: string,
-  context?: ReceiptContext
+  title: string
 ): Promise<boolean> {
-  const sanitizedTitle = (title || 'recibo-AUTOTEC').replace(/[^a-zA-Z0-9_\-]/g, '_');
-  try {
-    const pngBlob = await svgToPngBlob(svgContent, 2, context);
-    const file = new File([pngBlob], `${sanitizedTitle}.png`, { type: 'image/png' });
+  const sanitizedTitle = (title || 'recibo_AUTOTEC').replace(/[^a-zA-Z0-9_\-]/g, '_');
 
-    if (navigator.canShare && navigator.canShare({ files: [file] })) {
-      await navigator.share({
-        title: title,
-        text: `Comprovante de pagamento oficial - ${title}`,
-        files: [file],
-      });
-      return true;
-    }
-  } catch {
-    // Fallback if PNG sharing fails
-  }
-
-  // Try SVG file share fallback
   try {
     const fullSvg = svgContent.startsWith('<?xml')
       ? svgContent
       : `<?xml version="1.0" encoding="UTF-8"?>\n${svgContent}`;
     const svgBlob = new Blob([fullSvg], { type: 'image/svg+xml;charset=utf-8' });
     const svgFile = new File([svgBlob], `${sanitizedTitle}.svg`, { type: 'image/svg+xml' });
-    if (navigator.canShare && navigator.canShare({ files: [svgFile] })) {
+
+    if (typeof navigator !== 'undefined' && navigator.canShare && navigator.canShare({ files: [svgFile] })) {
       await navigator.share({
-        title: title,
-        text: `Comprovante de pagamento oficial - ${title}`,
         files: [svgFile],
+        title: title,
       });
       return true;
     }
   } catch {
-    // Unsupported
+    // Unsupported or cancelled
   }
 
   return false;

@@ -160,3 +160,143 @@ export interface ClientConsolidatedFinancials {
   charges: Charge[];
   isOverdue: boolean;
 }
+
+// ==========================================
+// SERVIÇOS TÉCNICOS (Instalação, Retirada, Manutenção, Reinstalação)
+// ==========================================
+export type TechnicalServiceCategory = 'Instalação' | 'Retirada' | 'Manutenção' | 'Reinstalação';
+
+export interface TechnicalServiceItem {
+  id: string;
+  category: TechnicalServiceCategory;
+  description: string;
+  value: number;
+}
+
+export interface TechnicalServiceOrder {
+  id: string;
+  orderNumber: string; // ex: OS-202611-0001
+  date?: string; // YYYY-MM-DD
+  executionDate?: string; // YYYY-MM-DD
+  clientId: string;
+  clientName: string;
+  clientPhone?: string;
+  clientDocument?: string;
+  vehicleId: string;
+  vehiclePlate: string;
+  vehicleBrand?: string;
+  vehicleModel: string;
+  vehicleColor?: string;
+  technicianName?: string;
+  items: TechnicalServiceItem[];
+  subtotal: number;
+  discount: number;
+  totalAmount: number;
+  paymentMethod: 'dinheiro' | 'pix';
+  paidAmount: number;
+  remainingBalance: number;
+  paymentDate?: string;
+  status: 'pendente' | 'parcial' | 'pago';
+  receiptNumber: string; // ex: REC-ST-202611-0001
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+  createdBy?: string;
+}
+
+// ==========================================
+// GASTOS DA EMPRESA (Despesas e Compras)
+// ==========================================
+export type ExpenseCategory =
+  | 'Apoio Rastreamento'
+  | 'Chips'
+  | 'Sistema'
+  | 'Rastreadores'
+  | 'Sensor'
+  | 'Antifurto'
+  | 'Chicotes'
+  | 'Relê'
+  | 'Fita Isolante'
+  | 'Abraçadeira'
+  | 'Outros Gastos';
+
+export interface ExpenseItem {
+  id: string;
+  category: ExpenseCategory;
+  description: string;
+  quantity: number;
+  unitPrice: number;
+  subtotal: number;
+}
+
+export interface CompanyExpense {
+  id: string;
+  expenseNumber: string; // ex: DESP-202611-0001
+  voucherNumber: string; // ex: COMP-202611-0001 (Comprovante de Despesa)
+  date: string; // YYYY-MM-DD
+  paymentDate?: string;
+  supplier: string; // Fornecedor ou estabelecimento
+  operationDescription?: string;
+  items: ExpenseItem[];
+  subtotal: number;
+  discount: number;
+  totalAmount: number;
+  paidAmount: number;
+  remainingBalance: number;
+  paymentMethod: 'dinheiro' | 'pix' | 'cartao_credito' | 'cartao_debito' | 'boleto' | 'transferencia';
+  status: 'pago' | 'pendente' | 'parcial';
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+  createdBy?: string;
+}
+
+// ==========================================
+// GESTÃO GERAL DA EMPRESA (Visão Consolidada)
+// ==========================================
+export type TransactionOrigin = 'mensalidade' | 'servico_tecnico' | 'despesa';
+export type TransactionType = 'receita' | 'despesa';
+
+export interface GeneralTransaction {
+  id: string;
+  date: string;
+  description: string;
+  entityName?: string;
+  partyName: string; // Cliente ou Fornecedor
+  identifier: string; // Recibo, O.S. ou Comprovante
+  category?: string;
+  origin: TransactionOrigin;
+  originLabel?: string;
+  type: TransactionType;
+  totalAmount?: number;
+  amount: number;
+  paidAmount?: number;
+  pendingAmount?: number;
+  paymentMethod?: string;
+  status: 'pago' | 'parcial' | 'pendente';
+  documentNumber?: string;
+  rawRecordId: string;
+  originalId?: string;
+}
+
+export interface GeneralFinancialSummary {
+  periodStart?: string;
+  periodEnd?: string;
+  totalRevenueReceived: number;
+  totalExpensesPaid: number;
+  netBalance: number;
+  monthlyReceived?: number;
+  servicesReceived?: number;
+  expensesPaid?: number;
+  monthlyFeesReceived?: number;
+  servicesRevenueReceived?: number;
+  companyExpensesPaid?: number;
+  pendingReceivables?: number;
+  monthlyPending?: number;
+  servicesPending?: number;
+  expensesPending?: number;
+  totalPendingReceivables?: number;
+  totalPendingPayables?: number;
+  partiallyReceivedAmount?: number;
+  totalTransactionsCount?: number;
+}

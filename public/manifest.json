@@ -1,24 +1,30 @@
 {
-  "name": "AUTOTEC - Gestão Financeira",
-  "short_name": "AUTOTEC Fin",
-  "description": "Sistema oficial AUTOTEC Rastreamento Veicular para controle financeiro de mensalidades, contratos e recebimentos.",
+  "name": "AUTOTEC — Gestão Financeira",
+  "short_name": "AUTOTEC",
+  "description": "Sistema oficial AUTOTEC Rastreamento Veicular para gestão financeira, serviços técnicos, despesas e relatórios.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0F172A",
-  "theme_color": "#0F172A",
+  "background_color": "#F3F4F2",
+  "theme_color": "#30334F",
   "orientation": "any",
   "icons": [
     {
       "src": "/autotec-logo-original.png",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
+    },
+    {
+      "src": "/autotec-logo-original.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     },
     {
       "src": "/icon.svg",
       "sizes": "192x192 512x512",
       "type": "image/svg+xml",
-      "purpose": "any maskable"
+      "purpose": "any"
     }
   ]
 }

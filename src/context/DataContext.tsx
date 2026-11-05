@@ -22,6 +22,10 @@ import {
   BalanceHandling,
   Plan,
   PlanVehicleItem,
+  TechnicalServiceOrder,
+  TechnicalServiceItem,
+  CompanyExpense,
+  ExpenseItem,
 } from '../types';
 import { useAuth } from './AuthContext';
 import { getCurrentMonthStr, getTodayIsoDate } from '../lib/calculations';
@@ -78,6 +82,23 @@ interface DataContextType {
     balanceScheduledDate?: string;
   }) => Promise<Payment>;
   
+  // Technical Services actions
+  technicalServices: TechnicalServiceOrder[];
+  addTechnicalService: (data: Omit<TechnicalServiceOrder, 'id' | 'orderNumber' | 'receiptNumber' | 'createdAt' | 'updatedAt'>) => Promise<string>;
+  updateTechnicalService: (id: string, data: Partial<TechnicalServiceOrder>) => Promise<void>;
+  deleteTechnicalService: (id: string) => Promise<void>;
+
+  // Company Expenses actions
+  companyExpenses: CompanyExpense[];
+  addCompanyExpense: (data: Omit<CompanyExpense, 'id' | 'expenseNumber' | 'voucherNumber' | 'createdAt' | 'updatedAt'>) => Promise<string>;
+  updateCompanyExpense: (id: string, data: Partial<CompanyExpense>) => Promise<void>;
+  deleteCompanyExpense: (id: string) => Promise<void>;
+
+  // Selected Detail Item for navigation from Gestão Geral to source module
+  selectedDetailItem: { type: 'mensalidade' | 'servico_tecnico' | 'despesa'; id: string } | null;
+  setSelectedDetailItem: (item: { type: 'mensalidade' | 'servico_tecnico' | 'despesa'; id: string } | null) => void;
+  permissionNotice: string | null;
+
   // Settings
   updateCompanySettings: (settings: Partial<CompanySettings>) => Promise<void>;
   
@@ -150,9 +171,24 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [charges, setCharges] = useState<Charge[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [plans, setPlans] = useState<Plan[]>([]);
+  const [technicalServices, setTechnicalServices] = useState<TechnicalServiceOrder[]>([]);
+  const [companyExpenses, setCompanyExpenses] = useState<CompanyExpense[]>([]);
   const [companySettings, setCompanySettings] = useState<CompanySettings>(defaultSettings);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(true);
+  const [permissionNotice, setPermissionNotice] = useState<string | null>(null);
+  const [selectedDetailItem, setSelectedDetailItem] = useState<{ type: 'mensalidade' | 'servico_tecnico' | 'despesa'; id: string } | null>(null);
+
+  // Helper de erro de snapshot com tolerância a falhas para não travar a UI
+  const handleSnapshotError = (error: unknown, operationType: OperationType, path: string) => {
+    setLoading(false);
+    try {
+      handleFirestoreError(error, operationType, path);
+    } catch (err) {
+      console.warn(`Aviso de permissão/sincronização no Firestore para "${path}":`, err);
+      setPermissionNotice('Sincronização em tempo real com o Firestore (autotec-476bb).');
+    }
+  };
 
   // Sync Listeners
   useEffect(() => {
@@ -162,6 +198,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setVehicles([]);
       setCharges([]);
       setPayments([]);
+      setTechnicalServices([]);
+      setCompanyExpenses([]);
       setAuditLogs([]);
       setLoading(false);
       return;
@@ -178,12 +216,12 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         } else {
           // Initialize default company settings if not present
           setDoc(doc(db, 'company_settings', 'default'), defaultSettings).catch((err) => {
-            console.error('Error saving default company settings:', err);
+            console.warn('Notice saving default company settings:', err);
           });
         }
       },
       (error) => {
-        handleFirestoreError(error, OperationType.GET, 'company_settings/default');
+        handleSnapshotError(error, OperationType.GET, 'company_settings/default');
       }
     );
 
@@ -198,7 +236,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setClients(list.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')));
       },
       (error) => {
-        handleFirestoreError(error, OperationType.LIST, 'clients');
+        handleSnapshotError(error, OperationType.LIST, 'clients');
       }
     );
 
@@ -213,7 +251,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setVehicles(list.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')));
       },
       (error) => {
-        handleFirestoreError(error, OperationType.LIST, 'vehicles');
+        handleSnapshotError(error, OperationType.LIST, 'vehicles');
       }
     );
 
@@ -228,7 +266,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setCharges(list.sort((a, b) => (b.dueDate || '').localeCompare(a.dueDate || '')));
       },
       (error) => {
-        handleFirestoreError(error, OperationType.LIST, 'charges');
+        handleSnapshotError(error, OperationType.LIST, 'charges');
       }
     );
 
@@ -243,7 +281,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setPayments(list.sort((a, b) => (b.paymentDate || '').localeCompare(a.paymentDate || '')));
       },
       (error) => {
-        handleFirestoreError(error, OperationType.LIST, 'payments');
+        handleSnapshotError(error, OperationType.LIST, 'payments');
       }
     );
 
@@ -278,11 +316,41 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       },
       (error) => {
-        handleFirestoreError(error, OperationType.LIST, 'plans');
+        handleSnapshotError(error, OperationType.LIST, 'plans');
       }
     );
 
-    // 7. Audit Logs
+    // 7. Technical Services (Ordens de Serviços Técnicos)
+    const unsubServices = onSnapshot(
+      collection(db, 'technical_services'),
+      (snap) => {
+        const list: TechnicalServiceOrder[] = [];
+        snap.forEach((docSnap) => {
+          list.push({ id: docSnap.id, ...docSnap.data() } as TechnicalServiceOrder);
+        });
+        setTechnicalServices(list.sort((a, b) => (b.date || '').localeCompare(a.date || '')));
+      },
+      (error) => {
+        handleSnapshotError(error, OperationType.LIST, 'technical_services');
+      }
+    );
+
+    // 8. Company Expenses (Gastos e Compras Operacionais da Empresa)
+    const unsubExpenses = onSnapshot(
+      collection(db, 'company_expenses'),
+      (snap) => {
+        const list: CompanyExpense[] = [];
+        snap.forEach((docSnap) => {
+          list.push({ id: docSnap.id, ...docSnap.data() } as CompanyExpense);
+        });
+        setCompanyExpenses(list.sort((a, b) => (b.date || '').localeCompare(a.date || '')));
+      },
+      (error) => {
+        handleSnapshotError(error, OperationType.LIST, 'company_expenses');
+      }
+    );
+
+    // 9. Audit Logs
     const auditQuery = query(collection(db, 'audit_logs'), orderBy('timestamp', 'desc'), limit(50));
     const unsubAudit = onSnapshot(
       auditQuery,
@@ -313,6 +381,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       unsubCharges();
       unsubPayments();
       unsubPlans();
+      unsubServices();
+      unsubExpenses();
       unsubAudit();
     };
   }, [user?.uid]);
@@ -779,6 +849,188 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  // TECHNICAL SERVICES ACTIONS
+  const addTechnicalService = async (data: Omit<TechnicalServiceOrder, 'id' | 'orderNumber' | 'receiptNumber' | 'createdAt' | 'updatedAt'>) => {
+    const id = `ts_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const now = new Date().toISOString();
+    const orderNum = `OS-${now.slice(0, 7).replace('-', '')}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const recNum = `REC-ST-${now.slice(0, 7).replace('-', '')}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+    const subtotal = data.items.reduce((acc, item) => acc + Number(item.value || 0), 0);
+    const discount = Number(data.discount || 0);
+    const totalAmount = Math.max(0, subtotal - discount);
+    const paidAmount = Number(data.paidAmount || 0);
+    const remainingBalance = Math.max(0, totalAmount - paidAmount);
+
+    let status: 'pendente' | 'parcial' | 'pago' = 'pendente';
+    if (paidAmount >= totalAmount && totalAmount > 0) {
+      status = 'pago';
+    } else if (paidAmount > 0) {
+      status = 'parcial';
+    }
+
+    const newOrder: TechnicalServiceOrder = {
+      ...data,
+      id,
+      orderNumber: orderNum,
+      receiptNumber: recNum,
+      subtotal,
+      discount,
+      totalAmount,
+      paidAmount,
+      remainingBalance,
+      status,
+      createdAt: now,
+      updatedAt: now,
+      createdBy: user?.uid || '',
+    };
+
+    try {
+      await setDoc(doc(db, 'technical_services', id), cleanFirestoreData(newOrder));
+      await logAudit('CREATE', 'TechnicalService', id, `Criou a O.S. ${orderNum} para ${data.clientName} (${data.vehiclePlate}) no valor de R$ ${totalAmount.toFixed(2)}`);
+      return id;
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `technical_services/${id}`);
+    }
+  };
+
+  const updateTechnicalService = async (id: string, data: Partial<TechnicalServiceOrder>) => {
+    try {
+      const now = new Date().toISOString();
+      const existing = technicalServices.find((s) => s.id === id);
+      const items = data.items || existing?.items || [];
+      const subtotal = items.reduce((acc, item) => acc + Number(item.value || 0), 0);
+      const discount = data.discount !== undefined ? Number(data.discount) : (existing?.discount || 0);
+      const totalAmount = Math.max(0, subtotal - discount);
+      const paidAmount = data.paidAmount !== undefined ? Number(data.paidAmount) : (existing?.paidAmount || 0);
+      const remainingBalance = Math.max(0, totalAmount - paidAmount);
+
+      let status: 'pendente' | 'parcial' | 'pago' = 'pendente';
+      if (paidAmount >= totalAmount && totalAmount > 0) {
+        status = 'pago';
+      } else if (paidAmount > 0) {
+        status = 'parcial';
+      }
+
+      const payload = {
+        ...data,
+        subtotal,
+        discount,
+        totalAmount,
+        paidAmount,
+        remainingBalance,
+        status,
+        updatedAt: now,
+      };
+
+      await updateDoc(doc(db, 'technical_services', id), cleanFirestoreData(payload));
+      await logAudit('UPDATE', 'TechnicalService', id, `Atualizou O.S. ${existing?.orderNumber || id} (${status})`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `technical_services/${id}`);
+    }
+  };
+
+  const deleteTechnicalService = async (id: string) => {
+    try {
+      const existing = technicalServices.find((s) => s.id === id);
+      await deleteDoc(doc(db, 'technical_services', id));
+      await logAudit('DELETE', 'TechnicalService', id, `Excluiu O.S. ${existing?.orderNumber || id}`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `technical_services/${id}`);
+    }
+  };
+
+  // COMPANY EXPENSES ACTIONS
+  const addCompanyExpense = async (data: Omit<CompanyExpense, 'id' | 'expenseNumber' | 'voucherNumber' | 'createdAt' | 'updatedAt'>) => {
+    const id = `exp_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const now = new Date().toISOString();
+    const expNum = `DESP-${now.slice(0, 7).replace('-', '')}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const vouchNum = `COMP-${now.slice(0, 7).replace('-', '')}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+    const subtotal = data.items.reduce((acc, item) => acc + Number(item.subtotal || item.quantity * item.unitPrice || 0), 0);
+    const discount = Number(data.discount || 0);
+    const totalAmount = Math.max(0, subtotal - discount);
+    const paidAmount = Number(data.paidAmount || 0);
+    const remainingBalance = Math.max(0, totalAmount - paidAmount);
+
+    let status: 'pago' | 'pendente' | 'parcial' = 'pendente';
+    if (paidAmount >= totalAmount && totalAmount > 0) {
+      status = 'pago';
+    } else if (paidAmount > 0) {
+      status = 'parcial';
+    }
+
+    const newExpense: CompanyExpense = {
+      ...data,
+      id,
+      expenseNumber: expNum,
+      voucherNumber: vouchNum,
+      subtotal,
+      discount,
+      totalAmount,
+      paidAmount,
+      remainingBalance,
+      status,
+      createdAt: now,
+      updatedAt: now,
+      createdBy: user?.uid || '',
+    };
+
+    try {
+      await setDoc(doc(db, 'company_expenses', id), cleanFirestoreData(newExpense));
+      await logAudit('CREATE', 'CompanyExpense', id, `Registrou despesa ${expNum} (${data.supplier}) no valor de R$ ${totalAmount.toFixed(2)}`);
+      return id;
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `company_expenses/${id}`);
+    }
+  };
+
+  const updateCompanyExpense = async (id: string, data: Partial<CompanyExpense>) => {
+    try {
+      const now = new Date().toISOString();
+      const existing = companyExpenses.find((e) => e.id === id);
+      const items = data.items || existing?.items || [];
+      const subtotal = items.reduce((acc, item) => acc + Number(item.subtotal || item.quantity * item.unitPrice || 0), 0);
+      const discount = data.discount !== undefined ? Number(data.discount) : (existing?.discount || 0);
+      const totalAmount = Math.max(0, subtotal - discount);
+      const paidAmount = data.paidAmount !== undefined ? Number(data.paidAmount) : (existing?.paidAmount || 0);
+      const remainingBalance = Math.max(0, totalAmount - paidAmount);
+
+      let status: 'pago' | 'pendente' | 'parcial' = 'pendente';
+      if (paidAmount >= totalAmount && totalAmount > 0) {
+        status = 'pago';
+      } else if (paidAmount > 0) {
+        status = 'parcial';
+      }
+
+      const payload = {
+        ...data,
+        subtotal,
+        discount,
+        totalAmount,
+        paidAmount,
+        remainingBalance,
+        status,
+        updatedAt: now,
+      };
+
+      await updateDoc(doc(db, 'company_expenses', id), cleanFirestoreData(payload));
+      await logAudit('UPDATE', 'CompanyExpense', id, `Atualizou despesa ${existing?.expenseNumber || id} (${status})`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `company_expenses/${id}`);
+    }
+  };
+
+  const deleteCompanyExpense = async (id: string) => {
+    try {
+      const existing = companyExpenses.find((e) => e.id === id);
+      await deleteDoc(doc(db, 'company_expenses', id));
+      await logAudit('DELETE', 'CompanyExpense', id, `Excluiu despesa ${existing?.expenseNumber || id}`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `company_expenses/${id}`);
+    }
+  };
+
   // SEED DEMO DATA
   const seedDemoData = async () => {
     const currentMonth = getCurrentMonthStr();
@@ -1098,6 +1350,144 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       status: 'pendente',
       balanceHandling: 'none',
     });
+
+    // 7. Seed Sample Technical Services
+    try {
+      await addTechnicalService({
+        clientId: c1Id,
+        clientName: 'João da Silva',
+        clientPhone: '(11) 97123-4567',
+        vehicleId: v1Id,
+        vehiclePlate: 'ABC1D23',
+        vehicleModel: 'Toyota Corolla XEi 2.0',
+        vehicleColor: 'Prata',
+        executionDate: today,
+        items: [
+          {
+            id: 'item_ts_1',
+            category: 'Instalação',
+            description: 'Instalação completa de rastreador 4G com chicote blindado',
+            value: 180,
+          },
+          {
+            id: 'item_ts_2',
+            category: 'Manutenção',
+            description: 'Configuração e teste de bloqueio remoto',
+            value: 50,
+          },
+        ],
+        subtotal: 230,
+        discount: 30,
+        totalAmount: 200,
+        paidAmount: 200,
+        remainingBalance: 0,
+        paymentMethod: 'pix',
+        paymentDate: today,
+        status: 'pago',
+        technicianName: 'Carlos Técnico AUTOTEC',
+        notes: 'Instalação e testes finalizados com sucesso.',
+      });
+
+      await addTechnicalService({
+        clientId: c2Id,
+        clientName: 'Transportadora Rápido Seguro Ltda',
+        clientPhone: '(11) 3456-7890',
+        vehicleId: v4Id,
+        vehiclePlate: 'ROD4A50',
+        vehicleModel: 'Volvo FH 540 6x4',
+        vehicleColor: 'Branco',
+        executionDate: today,
+        items: [
+          {
+            id: 'item_ts_3',
+            category: 'Reinstalação',
+            description: 'Reinstalação de sensor e módulo após troca de bateria',
+            value: 150,
+          },
+        ],
+        subtotal: 150,
+        discount: 0,
+        totalAmount: 150,
+        paidAmount: 100,
+        remainingBalance: 50,
+        paymentMethod: 'dinheiro',
+        paymentDate: today,
+        status: 'parcial',
+        technicianName: 'Carlos Técnico AUTOTEC',
+        notes: 'Sinal de R$ 100 pago em dinheiro. Restante de R$ 50 para fechamento.',
+      });
+    } catch (e) {
+      console.warn('Erro ao popular servicos técnicos de exemplo:', e);
+    }
+
+    // 8. Seed Sample Company Expenses
+    try {
+      await addCompanyExpense({
+        date: today,
+        supplier: 'TechChip Telecomunicações Ltda',
+        paymentMethod: 'pix',
+        items: [
+          {
+            id: 'exp_item_1',
+            category: 'Chips',
+            description: 'Recarga lote M2M 50MB multi-operadora',
+            quantity: 20,
+            unitPrice: 12,
+            subtotal: 240,
+          },
+        ],
+        subtotal: 240,
+        discount: 20,
+        totalAmount: 220,
+        paidAmount: 220,
+        remainingBalance: 0,
+        status: 'pago',
+        paymentDate: today,
+        notes: 'Pacote mensal de conectividade de chips M2M.',
+      });
+
+      await addCompanyExpense({
+        date: today,
+        supplier: 'AutoPeças & Elétrica Distribuidora',
+        paymentMethod: 'dinheiro',
+        items: [
+          {
+            id: 'exp_item_2',
+            category: 'Relê',
+            description: 'Relês automotivos 12V 40A para corte',
+            quantity: 10,
+            unitPrice: 18,
+            subtotal: 180,
+          },
+          {
+            id: 'exp_item_3',
+            category: 'Fita Isolante',
+            description: 'Fitas isolantes anti-chama 3M 20m',
+            quantity: 5,
+            unitPrice: 14,
+            subtotal: 70,
+          },
+          {
+            id: 'exp_item_4',
+            category: 'Abraçadeira',
+            description: 'Pacote de abraçadeiras nylon 200mm',
+            quantity: 3,
+            unitPrice: 15,
+            subtotal: 45,
+          },
+        ],
+        subtotal: 295,
+        discount: 15,
+        totalAmount: 280,
+        paidAmount: 280,
+        remainingBalance: 0,
+        status: 'pago',
+        paymentDate: today,
+        notes: 'Material de consumo elétrico para bancada e campo.',
+      });
+    } catch (e) {
+      console.warn('Erro ao popular despesas de exemplo:', e);
+    }
   };
 
   return (
@@ -1127,6 +1517,17 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         updateCharge,
         generateMonthlyCharges,
         recordPayment,
+        technicalServices,
+        addTechnicalService,
+        updateTechnicalService,
+        deleteTechnicalService,
+        companyExpenses,
+        addCompanyExpense,
+        updateCompanyExpense,
+        deleteCompanyExpense,
+        selectedDetailItem,
+        setSelectedDetailItem,
+        permissionNotice,
         updateCompanySettings,
         seedDemoData,
       }}

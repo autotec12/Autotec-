@@ -14,7 +14,10 @@ service cloud.firestore {
     }
 
     function isPrincipalAdmin() {
-      return isSignedIn() && request.auth.token.email.lower() == 'autotecrastreio@gmail.com';
+      return isSignedIn() && (
+        request.auth.token.email == 'autotecrastreio@gmail.com' ||
+        request.auth.token.email.matches('(?i)^autotecrastreio@gmail\\.com$')
+      );
     }
 
     function isAdmin() {
@@ -139,6 +142,26 @@ service cloud.firestore {
         incoming().operatorId == request.auth.uid;
       allow update: if false; // Payments are strictly immutable
       allow delete: if false; // Deleting payments is forbidden for financial integrity
+    }
+
+    // Technical Services (Serviços Técnicos: Instalação, Retirada, Manutenção, Reinstalação)
+    match /technical_services/{serviceId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(serviceId) &&
+        incoming().orderNumber is string && incoming().orderNumber.size() > 0 &&
+        incoming().clientId is string && incoming().totalAmount is number &&
+        incoming().status in ['pendente', 'parcial', 'pago'];
+      allow delete: if isAdmin();
+    }
+
+    // Company Expenses (Gastos da Empresa: Apoio, Chips, Sistema, Rastreadores, etc.)
+    match /company_expenses/{expenseId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(expenseId) &&
+        incoming().expenseNumber is string && incoming().expenseNumber.size() > 0 &&
+        incoming().totalAmount is number &&
+        incoming().status in ['pago', 'pendente', 'parcial'];
+      allow delete: if isAdmin();
     }
 
     // Audit logs: Append-only forensic trail
