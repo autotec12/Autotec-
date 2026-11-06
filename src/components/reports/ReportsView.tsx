@@ -419,6 +419,7 @@ export const ReportsView: React.FC = () => {
                   <th className="py-3 px-4">Data</th>
                   <th className="py-3 px-4">Cliente</th>
                   <th className="py-3 px-4">Placa / Veículo</th>
+                  <th className="py-3 px-4">Técnico</th>
                   <th className="py-3 px-4">Categorias</th>
                   <th className="py-3 px-4">Total</th>
                   <th className="py-3 px-4">Pago</th>
@@ -433,6 +434,7 @@ export const ReportsView: React.FC = () => {
                     <td className="py-3 px-4">{formatDate(s.executionDate || s.createdAt)}</td>
                     <td className="py-3 px-4 font-bold">{s.clientName}</td>
                     <td className="py-3 px-4">{s.vehiclePlate} ({s.vehicleModel})</td>
+                    <td className="py-3 px-4 font-semibold text-slate-700">{s.technicianName || '-'}</td>
                     <td className="py-3 px-4">{s.items.map((i) => i.category).join(', ')}</td>
                     <td className="py-3 px-4 font-bold">{formatCurrency(s.totalAmount)}</td>
                     <td className="py-3 px-4 text-emerald-700 font-bold">{formatCurrency(s.paidAmount)}</td>

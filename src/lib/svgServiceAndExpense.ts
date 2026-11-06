@@ -175,7 +175,7 @@ export function generateTechnicalServiceReceiptSvg(
     <text x="700" y="100" font-size="11" font-weight="800" fill="#166534" text-anchor="end">${escapeXml(formatCurrency(order.paidAmount))}</text>
 
     <text x="420" y="122" font-size="11" font-weight="700" fill="${order.remainingBalance > 0 ? '#DC2626' : '#64748B'}">Saldo Restante:</text>
-    <text x="700" y="122" font-size="11" font-weight="800" fill="${order.remainingBalance > 0 ? '#DC2626' : '#64748B'} text-anchor="end">${escapeXml(formatCurrency(order.remainingBalance))}</text>
+    <text x="700" y="122" font-size="11" font-weight="800" fill="${order.remainingBalance > 0 ? '#DC2626' : '#64748B'}" text-anchor="end">${escapeXml(formatCurrency(order.remainingBalance))}</text>
   </g>
 
   <!-- FOOTER -->

@@ -26,6 +26,9 @@ import {
   TechnicalServiceItem,
   CompanyExpense,
   ExpenseItem,
+  Technician,
+  TechnicalServiceType,
+  ExpenseCategoryItem,
 } from '../types';
 import { useAuth } from './AuthContext';
 import { getCurrentMonthStr, getTodayIsoDate } from '../lib/calculations';
@@ -88,11 +91,32 @@ interface DataContextType {
   updateTechnicalService: (id: string, data: Partial<TechnicalServiceOrder>) => Promise<void>;
   deleteTechnicalService: (id: string) => Promise<void>;
 
+  // Technicians actions
+  technicians: Technician[];
+  addTechnician: (data: Omit<Technician, 'id' | 'createdAt' | 'updatedAt'>) => Promise<string>;
+  updateTechnician: (id: string, data: Partial<Technician>) => Promise<void>;
+  deleteTechnician: (id: string) => Promise<void>;
+  toggleTechnicianStatus: (id: string) => Promise<void>;
+
+  // Technical Service Types actions
+  technicalServiceTypes: TechnicalServiceType[];
+  addTechnicalServiceType: (data: Omit<TechnicalServiceType, 'id' | 'createdAt' | 'updatedAt'>) => Promise<string>;
+  updateTechnicalServiceType: (id: string, data: Partial<TechnicalServiceType>) => Promise<void>;
+  deleteTechnicalServiceType: (id: string) => Promise<void>;
+  toggleTechnicalServiceTypeStatus: (id: string) => Promise<void>;
+
   // Company Expenses actions
   companyExpenses: CompanyExpense[];
   addCompanyExpense: (data: Omit<CompanyExpense, 'id' | 'expenseNumber' | 'voucherNumber' | 'createdAt' | 'updatedAt'>) => Promise<string>;
   updateCompanyExpense: (id: string, data: Partial<CompanyExpense>) => Promise<void>;
   deleteCompanyExpense: (id: string) => Promise<void>;
+
+  // Custom Expense Categories actions
+  customExpenseCategories: ExpenseCategoryItem[];
+  addExpenseCategory: (data: Omit<ExpenseCategoryItem, 'id' | 'createdAt' | 'updatedAt'>) => Promise<string>;
+  updateExpenseCategory: (id: string, data: Partial<ExpenseCategoryItem>) => Promise<void>;
+  deleteExpenseCategory: (id: string) => Promise<void>;
+  toggleExpenseCategoryStatus: (id: string) => Promise<void>;
 
   // Selected Detail Item for navigation from Gestão Geral to source module
   selectedDetailItem: { type: 'mensalidade' | 'servico_tecnico' | 'despesa'; id: string } | null;
@@ -173,6 +197,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [plans, setPlans] = useState<Plan[]>([]);
   const [technicalServices, setTechnicalServices] = useState<TechnicalServiceOrder[]>([]);
   const [companyExpenses, setCompanyExpenses] = useState<CompanyExpense[]>([]);
+  const [technicians, setTechnicians] = useState<Technician[]>([]);
+  const [technicalServiceTypes, setTechnicalServiceTypes] = useState<TechnicalServiceType[]>([]);
+  const [customExpenseCategories, setCustomExpenseCategories] = useState<ExpenseCategoryItem[]>([]);
   const [companySettings, setCompanySettings] = useState<CompanySettings>(defaultSettings);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(true);
@@ -200,6 +227,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setPayments([]);
       setTechnicalServices([]);
       setCompanyExpenses([]);
+      setTechnicians([]);
+      setTechnicalServiceTypes([]);
+      setCustomExpenseCategories([]);
       setAuditLogs([]);
       setLoading(false);
       return;
@@ -350,7 +380,52 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     );
 
-    // 9. Audit Logs
+    // 9. Technicians
+    const unsubTechnicians = onSnapshot(
+      collection(db, 'technicians'),
+      (snap) => {
+        const list: Technician[] = [];
+        snap.forEach((docSnap) => {
+          list.push({ id: docSnap.id, ...docSnap.data() } as Technician);
+        });
+        setTechnicians(list.sort((a, b) => (a.name || '').localeCompare(b.name || '')));
+      },
+      (error) => {
+        handleSnapshotError(error, OperationType.LIST, 'technicians');
+      }
+    );
+
+    // 10. Technical Service Types
+    const unsubServiceTypes = onSnapshot(
+      collection(db, 'technical_service_types'),
+      (snap) => {
+        const list: TechnicalServiceType[] = [];
+        snap.forEach((docSnap) => {
+          list.push({ id: docSnap.id, ...docSnap.data() } as TechnicalServiceType);
+        });
+        setTechnicalServiceTypes(list.sort((a, b) => (a.name || '').localeCompare(b.name || '')));
+      },
+      (error) => {
+        handleSnapshotError(error, OperationType.LIST, 'technical_service_types');
+      }
+    );
+
+    // 11. Custom Expense Categories
+    const unsubExpCategories = onSnapshot(
+      collection(db, 'expense_categories'),
+      (snap) => {
+        const list: ExpenseCategoryItem[] = [];
+        snap.forEach((docSnap) => {
+          list.push({ id: docSnap.id, ...docSnap.data() } as ExpenseCategoryItem);
+        });
+        setCustomExpenseCategories(list.sort((a, b) => (a.name || '').localeCompare(b.name || '')));
+      },
+      (error) => {
+        handleSnapshotError(error, OperationType.LIST, 'expense_categories');
+      }
+    );
+
+    // 12. Audit Logs
     const auditQuery = query(collection(db, 'audit_logs'), orderBy('timestamp', 'desc'), limit(50));
     const unsubAudit = onSnapshot(
       auditQuery,
@@ -383,6 +458,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       unsubPlans();
       unsubServices();
       unsubExpenses();
+      unsubTechnicians();
+      unsubServiceTypes();
+      unsubExpCategories();
       unsubAudit();
     };
   }, [user?.uid]);
@@ -1031,6 +1109,249 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  // TECHNICIAN ACTIONS
+  const addTechnician = async (data: Omit<Technician, 'id' | 'createdAt' | 'updatedAt'>) => {
+    const id = `tech_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const now = new Date().toISOString();
+    const newTechnician: Technician = {
+      ...data,
+      id,
+      name: data.name?.trim() || 'Técnico',
+      status: data.status || 'ativo',
+      createdAt: now,
+      updatedAt: now,
+      createdBy: user?.uid || '',
+    };
+    try {
+      await setDoc(doc(db, 'technicians', id), cleanFirestoreData(newTechnician));
+      await logAudit('CREATE', 'Technician', id, `Cadastrou o técnico ${newTechnician.name}`);
+      return id;
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `technicians/${id}`);
+      throw error;
+    }
+  };
+
+  const updateTechnician = async (id: string, data: Partial<Technician>) => {
+    try {
+      const now = new Date().toISOString();
+      const payload: Record<string, any> = {
+        ...data,
+        updatedAt: now,
+      };
+      if (data.name) payload.name = data.name.trim();
+
+      await updateDoc(doc(db, 'technicians', id), cleanFirestoreData(payload));
+      await logAudit('UPDATE', 'Technician', id, `Atualizou dados do técnico ${data.name || id}`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `technicians/${id}`);
+      throw error;
+    }
+  };
+
+  const deleteTechnician = async (id: string) => {
+    const tech = technicians.find((t) => t.id === id);
+    const techName = tech?.name || id;
+
+    // Check if technician is linked to existing technical services
+    const linkedServices = technicalServices.filter(
+      (s) => s.technicianId === id || (tech?.name && s.technicianName?.trim().toLowerCase() === tech.name.trim().toLowerCase())
+    );
+
+    if (linkedServices.length > 0) {
+      throw new Error(
+        `Não é possível excluir o técnico "${techName}". Existem ${linkedServices.length} ordem(ns) de serviço vinculada(s) a este técnico. Para manter o histórico íntegro, você pode desativar o cadastro do técnico.`
+      );
+    }
+
+    try {
+      await deleteDoc(doc(db, 'technicians', id));
+      await logAudit('DELETE', 'Technician', id, `Excluiu o técnico "${techName}"`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `technicians/${id}`);
+      throw error;
+    }
+  };
+
+  const toggleTechnicianStatus = async (id: string) => {
+    const tech = technicians.find((t) => t.id === id);
+    if (!tech) return;
+    const newStatus = tech.status === 'ativo' ? 'inativo' : 'ativo';
+    try {
+      const now = new Date().toISOString();
+      await updateDoc(doc(db, 'technicians', id), cleanFirestoreData({
+        status: newStatus,
+        updatedAt: now,
+      }));
+      await logAudit('UPDATE', 'Technician', id, `Alterou status do técnico "${tech.name}" para "${newStatus}"`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `technicians/${id}`);
+      throw error;
+    }
+  };
+
+  // TECHNICAL SERVICE TYPES ACTIONS
+  const addTechnicalServiceType = async (data: Omit<TechnicalServiceType, 'id' | 'createdAt' | 'updatedAt'>) => {
+    const id = `stype_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const now = new Date().toISOString();
+    const newType: TechnicalServiceType = {
+      ...data,
+      id,
+      name: data.name.trim(),
+      status: data.status || 'ativo',
+      createdAt: now,
+      updatedAt: now,
+      createdBy: user?.uid || '',
+    };
+    try {
+      await setDoc(doc(db, 'technical_service_types', id), cleanFirestoreData(newType));
+      await logAudit('CREATE', 'TechnicalServiceType', id, `Cadastrou o tipo de serviço técnico "${newType.name}"`);
+      return id;
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `technical_service_types/${id}`);
+      throw error;
+    }
+  };
+
+  const updateTechnicalServiceType = async (id: string, data: Partial<TechnicalServiceType>) => {
+    try {
+      const now = new Date().toISOString();
+      const payload: Record<string, any> = {
+        ...data,
+        updatedAt: now,
+      };
+      if (data.name) payload.name = data.name.trim();
+
+      await updateDoc(doc(db, 'technical_service_types', id), cleanFirestoreData(payload));
+      await logAudit('UPDATE', 'TechnicalServiceType', id, `Atualizou o tipo de serviço técnico "${data.name || id}"`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `technical_service_types/${id}`);
+      throw error;
+    }
+  };
+
+  const deleteTechnicalServiceType = async (id: string) => {
+    const sType = technicalServiceTypes.find((t) => t.id === id);
+    const typeName = sType?.name || id;
+
+    // Check if any technical service item references this type
+    const linkedServices = technicalServices.filter((s) =>
+      s.items?.some((item) => item.category?.trim().toLowerCase() === typeName.trim().toLowerCase())
+    );
+
+    if (linkedServices.length > 0) {
+      throw new Error(
+        `Não é possível excluir o tipo de serviço "${typeName}". Existem ${linkedServices.length} ordem(ns) de serviço com itens deste tipo. Para manter o histórico seguro, desative este serviço.`
+      );
+    }
+
+    try {
+      await deleteDoc(doc(db, 'technical_service_types', id));
+      await logAudit('DELETE', 'TechnicalServiceType', id, `Excluiu o tipo de serviço "${typeName}"`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `technical_service_types/${id}`);
+      throw error;
+    }
+  };
+
+  const toggleTechnicalServiceTypeStatus = async (id: string) => {
+    const sType = technicalServiceTypes.find((t) => t.id === id);
+    if (!sType) return;
+    const newStatus = sType.status === 'ativo' ? 'inativo' : 'ativo';
+    try {
+      const now = new Date().toISOString();
+      await updateDoc(doc(db, 'technical_service_types', id), cleanFirestoreData({
+        status: newStatus,
+        updatedAt: now,
+      }));
+      await logAudit('UPDATE', 'TechnicalServiceType', id, `Alterou status do tipo de serviço "${sType.name}" para "${newStatus}"`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `technical_service_types/${id}`);
+      throw error;
+    }
+  };
+
+  // EXPENSE CATEGORIES ACTIONS
+  const addExpenseCategory = async (data: Omit<ExpenseCategoryItem, 'id' | 'createdAt' | 'updatedAt'>) => {
+    const id = `expcat_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const now = new Date().toISOString();
+    const newCat: ExpenseCategoryItem = {
+      ...data,
+      id,
+      name: data.name.trim(),
+      status: data.status || 'ativo',
+      createdAt: now,
+      updatedAt: now,
+      createdBy: user?.uid || '',
+    };
+    try {
+      await setDoc(doc(db, 'expense_categories', id), cleanFirestoreData(newCat));
+      await logAudit('CREATE', 'ExpenseCategory', id, `Cadastrou o item/categoria de despesa "${newCat.name}"`);
+      return id;
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `expense_categories/${id}`);
+      throw error;
+    }
+  };
+
+  const updateExpenseCategory = async (id: string, data: Partial<ExpenseCategoryItem>) => {
+    try {
+      const now = new Date().toISOString();
+      const payload: Record<string, any> = {
+        ...data,
+        updatedAt: now,
+      };
+      if (data.name) payload.name = data.name.trim();
+
+      await updateDoc(doc(db, 'expense_categories', id), cleanFirestoreData(payload));
+      await logAudit('UPDATE', 'ExpenseCategory', id, `Atualizou a categoria/item de despesa "${data.name || id}"`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `expense_categories/${id}`);
+      throw error;
+    }
+  };
+
+  const deleteExpenseCategory = async (id: string) => {
+    const cat = customExpenseCategories.find((c) => c.id === id);
+    const catName = cat?.name || id;
+
+    // Check if any company expense item references this category
+    const linkedExpenses = companyExpenses.filter((e) =>
+      e.items?.some((item) => item.category?.trim().toLowerCase() === catName.trim().toLowerCase())
+    );
+
+    if (linkedExpenses.length > 0) {
+      throw new Error(
+        `Não é possível excluir o item "${catName}". Existem ${linkedExpenses.length} lançamento(s) de despesa utilizando este item. Para manter o histórico seguro, desative este item.`
+      );
+    }
+
+    try {
+      await deleteDoc(doc(db, 'expense_categories', id));
+      await logAudit('DELETE', 'ExpenseCategory', id, `Excluiu o item/categoria de despesa "${catName}"`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `expense_categories/${id}`);
+      throw error;
+    }
+  };
+
+  const toggleExpenseCategoryStatus = async (id: string) => {
+    const cat = customExpenseCategories.find((c) => c.id === id);
+    if (!cat) return;
+    const newStatus = cat.status === 'ativo' ? 'inativo' : 'ativo';
+    try {
+      const now = new Date().toISOString();
+      await updateDoc(doc(db, 'expense_categories', id), cleanFirestoreData({
+        status: newStatus,
+        updatedAt: now,
+      }));
+      await logAudit('UPDATE', 'ExpenseCategory', id, `Alterou status do item de despesa "${cat.name}" para "${newStatus}"`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `expense_categories/${id}`);
+      throw error;
+    }
+  };
+
   // SEED DEMO DATA
   const seedDemoData = async () => {
     const currentMonth = getCurrentMonthStr();
@@ -1521,10 +1842,25 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         addTechnicalService,
         updateTechnicalService,
         deleteTechnicalService,
+        technicians,
+        addTechnician,
+        updateTechnician,
+        deleteTechnician,
+        toggleTechnicianStatus,
+        technicalServiceTypes,
+        addTechnicalServiceType,
+        updateTechnicalServiceType,
+        deleteTechnicalServiceType,
+        toggleTechnicalServiceTypeStatus,
         companyExpenses,
         addCompanyExpense,
         updateCompanyExpense,
         deleteCompanyExpense,
+        customExpenseCategories,
+        addExpenseCategory,
+        updateExpenseCategory,
+        deleteExpenseCategory,
+        toggleExpenseCategoryStatus,
         selectedDetailItem,
         setSelectedDetailItem,
         permissionNotice,

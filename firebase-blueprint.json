@@ -212,6 +212,49 @@
         "updatedAt": { "type": "string" }
       },
       "required": ["expenseNumber", "voucherNumber", "date", "totalAmount", "status"]
+    },
+    "Technician": {
+      "title": "Technician",
+      "description": "Cadastro de técnicos responsáveis por ordens de serviço",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "maxLength": 150 },
+        "phone": { "type": "string", "maxLength": 30 },
+        "whatsapp": { "type": "string", "maxLength": 30 },
+        "cpf": { "type": "string", "maxLength": 30 },
+        "address": { "type": "string", "maxLength": 250 },
+        "email": { "type": "string", "maxLength": 120 },
+        "notes": { "type": "string", "maxLength": 1000 },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["name", "active"]
+    },
+    "TechnicalServiceType": {
+      "title": "TechnicalServiceType",
+      "description": "Tipos e categorias de serviços técnicos cadastrados",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "maxLength": 150 },
+        "description": { "type": "string", "maxLength": 500 },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["name", "active"]
+    },
+    "ExpenseCategoryItem": {
+      "title": "ExpenseCategoryItem",
+      "description": "Tipos e itens de despesas e compras cadastrados",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "maxLength": 150 },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["name", "active"]
     }
   },
   "firestore": {
@@ -246,6 +289,18 @@
     "/technical_services/{serviceId}": {
       "schema": { "$ref": "TechnicalServiceOrder" },
       "description": "Ordens de serviços técnicos executados"
+    },
+    "/technicians/{technicianId}": {
+      "schema": { "$ref": "Technician" },
+      "description": "Cadastro de técnicos responsáveis por serviços"
+    },
+    "/technical_service_types/{serviceTypeId}": {
+      "schema": { "$ref": "TechnicalServiceType" },
+      "description": "Categorias e tipos customizados de serviços técnicos"
+    },
+    "/expense_categories/{categoryId}": {
+      "schema": { "$ref": "ExpenseCategoryItem" },
+      "description": "Itens customizados de compras e despesas da empresa"
     },
     "/company_expenses/{expenseId}": {
       "schema": { "$ref": "CompanyExpense" },

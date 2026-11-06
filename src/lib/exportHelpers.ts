@@ -194,3 +194,79 @@ export function downloadPdfFile(pdfBlob: Blob, rawFileName: string): void {
   }
   downloadBlobFile(pdfBlob, cleanName);
 }
+
+/**
+ * Shares an authentic PDF document file directly as an attachment using Web Share API.
+ * Follows strict native file sharing standards so WhatsApp, Mail, and device share sheets
+ * receive the PDF as a document attachment.
+ */
+export async function sharePdfFile(
+  pdfBlob: Blob,
+  rawFileName: string,
+  title?: string
+): Promise<ShareResult> {
+  let cleanName = (rawFileName || 'documento_AUTOTEC')
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9_\-]/g, '_');
+
+  if (!cleanName.toLowerCase().endsWith('.pdf')) {
+    cleanName += '.pdf';
+  }
+
+  const file = new File([pdfBlob], cleanName, {
+    type: 'application/pdf',
+    lastModified: Date.now(),
+  });
+
+  const hasNavigatorShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function';
+  let canShareFiles = false;
+
+  if (hasNavigatorShare && typeof navigator.canShare === 'function') {
+    try {
+      canShareFiles = navigator.canShare({ files: [file] });
+    } catch {
+      canShareFiles = false;
+    }
+  }
+
+  if (!hasNavigatorShare || !canShareFiles) {
+    // If native share sheet doesn't support PDF files directly on this device/browser, download it
+    downloadBlobFile(pdfBlob, cleanName);
+    return {
+      success: false,
+      status: 'unsupported',
+      fallbackTriggered: true,
+      message:
+        'Seu navegador ou dispositivo não possui suporte a compartilhamento direto de arquivos. O arquivo PDF foi baixado para você anexar manualmente.',
+    };
+  }
+
+  try {
+    await navigator.share({
+      files: [file],
+      title: title || cleanName,
+    });
+    return {
+      success: true,
+      status: 'shared_intent_opened',
+      message: 'Menu de compartilhamento nativo aberto com o arquivo PDF anexado!',
+    };
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      return {
+        success: false,
+        status: 'cancelled',
+        message: 'Compartilhamento cancelado.',
+      };
+    }
+    downloadBlobFile(pdfBlob, cleanName);
+    return {
+      success: false,
+      status: 'error',
+      fallbackTriggered: true,
+      message: 'Não foi possível compartilhar diretamente. O arquivo PDF foi baixado no seu dispositivo para envio manual.',
+    };
+  }
+}

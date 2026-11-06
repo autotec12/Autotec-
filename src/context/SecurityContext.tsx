@@ -55,12 +55,92 @@ const SecurityContext = createContext<SecurityContextType>({
 export const SecurityProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, profile, logout } = useAuth();
 
-  const [isUnlocked, setIsUnlocked] = useState(false);
-  const [hasPinSetup, setHasPinSetup] = useState<boolean | null>(null);
-  const [isCheckingPin, setIsCheckingPin] = useState(true);
+  // Helpers for tab session unlock persistence
+  const isSessionUnlocked = useCallback((uid?: string): boolean => {
+    try {
+      const stored = (uid ? sessionStorage.getItem(`autotec_pin_session_unlocked_${uid}`) : null) ||
+                     sessionStorage.getItem('autotec_pin_session_unlocked');
+      const lastActivity = sessionStorage.getItem('autotec_last_activity_time');
+      if (stored === 'true') {
+        if (!lastActivity) {
+          sessionStorage.setItem('autotec_last_activity_time', String(Date.now()));
+          return true;
+        }
+        const lastTime = parseInt(lastActivity, 10);
+        if (!isNaN(lastTime) && Date.now() - lastTime < INACTIVITY_TIMEOUT_MS) {
+          sessionStorage.setItem('autotec_last_activity_time', String(Date.now()));
+          return true;
+        }
+      }
+    } catch {
+      // Storage access error handling
+    }
+    return false;
+  }, []);
+
+  const markSessionUnlocked = useCallback((uid: string) => {
+    try {
+      sessionStorage.setItem(`autotec_pin_session_unlocked_${uid}`, 'true');
+      sessionStorage.setItem('autotec_pin_session_unlocked', 'true');
+      sessionStorage.setItem('autotec_last_activity_time', String(Date.now()));
+    } catch {
+      // Ignore
+    }
+  }, []);
+
+  const clearSessionUnlocked = useCallback((uid?: string) => {
+    try {
+      if (uid) {
+        sessionStorage.removeItem(`autotec_pin_session_unlocked_${uid}`);
+      }
+      sessionStorage.removeItem('autotec_pin_session_unlocked');
+      sessionStorage.removeItem('autotec_last_activity_time');
+    } catch {
+      // Ignore
+    }
+  }, []);
+
+  // Initialize isUnlocked synchronously from sessionStorage on reload (F5)
+  const [isUnlocked, setIsUnlocked] = useState<boolean>(() => {
+    try {
+      const stored = sessionStorage.getItem('autotec_pin_session_unlocked');
+      const lastActivity = sessionStorage.getItem('autotec_last_activity_time');
+      if (stored === 'true') {
+        if (!lastActivity) return true;
+        const lastTime = parseInt(lastActivity, 10);
+        if (!isNaN(lastTime) && Date.now() - lastTime < INACTIVITY_TIMEOUT_MS) {
+          return true;
+        }
+      }
+    } catch {
+      // Storage access error handling
+    }
+    return false;
+  });
+
+  const [hasPinSetup, setHasPinSetup] = useState<boolean | null>(() => {
+    // If session was already unlocked, user definitely has PIN configured
+    try {
+      if (sessionStorage.getItem('autotec_pin_session_unlocked') === 'true') {
+        return true;
+      }
+    } catch {}
+    return null;
+  });
+
+  const [isCheckingPin, setIsCheckingPin] = useState<boolean>(() => {
+    // If session is already unlocked, don't block UI with full page loader
+    try {
+      if (sessionStorage.getItem('autotec_pin_session_unlocked') === 'true') {
+        return false;
+      }
+    } catch {}
+    return true;
+  });
 
   const lastActivityRef = useRef<number>(Date.now());
   const timerRef = useRef<any>(null);
+  const prevUidRef = useRef<string | null>(null);
 
   // 1. CARREGAR ESTADO DO PIN DO USUÁRIO CONECTADO
   useEffect(() => {
@@ -72,11 +152,34 @@ export const SecurityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           setIsUnlocked(false);
           setHasPinSetup(null);
           setIsCheckingPin(false);
+          prevUidRef.current = null;
         }
         return;
       }
 
-      setIsCheckingPin(true);
+      // Se for o mesmo usuário e já estiver desbloqueado (ex: renovação de token, reconexão de rede)
+      if (prevUidRef.current === user.uid && isUnlocked) {
+        if (isMounted) {
+          setIsCheckingPin(false);
+          setHasPinSetup(true);
+        }
+        return;
+      }
+
+      prevUidRef.current = user.uid;
+
+      // Se a sessão já estava marcada como desbloqueada no sessionStorage
+      if (isSessionUnlocked(user.uid)) {
+        if (isMounted) {
+          setIsUnlocked(true);
+          setHasPinSetup(true);
+          setIsCheckingPin(false);
+        }
+      } else {
+        if (isMounted) {
+          setIsCheckingPin(true);
+        }
+      }
 
       try {
         // Primeiro: verificar vault local isolado (IndexedDB)
@@ -85,18 +188,20 @@ export const SecurityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           if (isMounted) {
             setHasPinSetup(true);
             setIsCheckingPin(false);
+            if (isSessionUnlocked(user.uid)) {
+              setIsUnlocked(true);
+            }
           }
           return;
         }
 
-        // Segundo: verificar se há hash criptográfico sincronizado no Firestore (perfil privado do usuário)
+        // Segundo: verificar se há hash criptográfico sincronizado no Firestore
         const userDocRef = doc(db, 'users', user.uid);
         const userSnap = await getDoc(userDocRef);
 
         if (userSnap.exists()) {
           const data = userSnap.data();
           if (data.pinHashHex && data.pinSaltHex) {
-            // Sincronizar para o IndexedDB local deste dispositivo
             await savePinToVault(
               user.uid,
               data.pinSaltHex,
@@ -107,6 +212,9 @@ export const SecurityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             if (isMounted) {
               setHasPinSetup(true);
               setIsCheckingPin(false);
+              if (isSessionUnlocked(user.uid)) {
+                setIsUnlocked(true);
+              }
             }
             return;
           }
@@ -131,12 +239,15 @@ export const SecurityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     return () => {
       isMounted = false;
     };
-  }, [user?.uid]);
+  }, [user?.uid, isSessionUnlocked, isUnlocked]);
 
   // 2. FUNÇÃO DE BLOQUEIO MANUAL E AUTOMÁTICO
   const lockSystem = useCallback(() => {
+    if (user?.uid) {
+      clearSessionUnlocked(user.uid);
+    }
     setIsUnlocked(false);
-  }, []);
+  }, [user?.uid]);
 
   // 3. MONITORAMENTO DE INATIVIDADE (5 MINUTOS) & VISIBILIDADE DE ABA
   useEffect(() => {
@@ -145,9 +256,15 @@ export const SecurityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
 
     lastActivityRef.current = Date.now();
+    try {
+      sessionStorage.setItem('autotec_last_activity_time', String(Date.now()));
+    } catch {}
 
     const updateActivity = () => {
       lastActivityRef.current = Date.now();
+      try {
+        sessionStorage.setItem('autotec_last_activity_time', String(Date.now()));
+      } catch {}
     };
 
     // Eventos de interação real do usuário
@@ -165,13 +282,17 @@ export const SecurityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     // Verificação de visibilidade (quando o usuário volta à aba do navegador ou abre o app)
     const handleVisibilityChange = () => {
       if (!document.hidden) {
-        const elapsed = Date.now() - lastActivityRef.current;
+        const storedLastActivity = sessionStorage.getItem('autotec_last_activity_time');
+        const lastTime = storedLastActivity ? parseInt(storedLastActivity, 10) : lastActivityRef.current;
+        const elapsed = Date.now() - lastTime;
         if (elapsed >= INACTIVITY_TIMEOUT_MS) {
           lockSystem();
+        } else {
+          lastActivityRef.current = Date.now();
+          try {
+            sessionStorage.setItem('autotec_last_activity_time', String(Date.now()));
+          } catch {}
         }
-      } else {
-        // Marca quando a aba ficou oculta
-        lastActivityRef.current = Date.now();
       }
     };
 
@@ -241,6 +362,7 @@ export const SecurityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       if (isValid) {
         // Resetar contador de erros
         await resetLockoutState(user.uid);
+        markSessionUnlocked(user.uid);
         setIsUnlocked(true);
         lastActivityRef.current = Date.now();
         return { success: true };
@@ -303,6 +425,7 @@ export const SecurityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       }
 
       await resetLockoutState(user.uid);
+      markSessionUnlocked(user.uid);
       setHasPinSetup(true);
       setIsUnlocked(true);
       lastActivityRef.current = Date.now();
@@ -377,6 +500,9 @@ export const SecurityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   // 8. ENCERRAR SESSÃO COMPLETAMENTE
   const logoutCompletely = async () => {
+    if (user?.uid) {
+      clearSessionUnlocked(user.uid);
+    }
     setIsUnlocked(false);
     await logout();
   };

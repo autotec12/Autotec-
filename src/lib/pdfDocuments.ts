@@ -693,6 +693,7 @@ export function generateTechnicalServicesReportPdf(
     formatDate(s.executionDate || s.createdAt),
     s.clientName,
     s.vehiclePlate,
+    s.technicianName || 'Não informado',
     s.items.map((i) => i.category).join(', '),
     formatCurrency(s.totalAmount),
     formatCurrency(s.discount),
@@ -708,7 +709,7 @@ export function generateTechnicalServicesReportPdf(
 
   autoTable(doc, {
     startY,
-    head: [['O.S.', 'DATA', 'CLIENTE', 'PLACA', 'CATEGORIAS', 'TOTAL (R$)', 'DESC.', 'PAGO (R$)', 'SALDO (R$)', 'FORMA', 'STATUS']],
+    head: [['O.S.', 'DATA', 'CLIENTE', 'PLACA', 'TÉCNICO', 'CATEGORIAS', 'TOTAL (R$)', 'DESC.', 'PAGO (R$)', 'SALDO (R$)', 'FORMA', 'STATUS']],
     body: rows,
     theme: 'grid',
     headStyles: {
@@ -723,14 +724,15 @@ export function generateTechnicalServicesReportPdf(
     },
     columnStyles: {
       0: { fontStyle: 'bold' },
-      5: { halign: 'right', fontStyle: 'bold' },
-      6: { halign: 'right' },
-      7: { halign: 'right', textColor: [22, 101, 52] },
-      8: { halign: 'right', textColor: [180, 83, 9] },
-      10: { halign: 'center', fontStyle: 'bold' },
+      4: { fontStyle: 'normal' },
+      6: { halign: 'right', fontStyle: 'bold' },
+      7: { halign: 'right' },
+      8: { halign: 'right', textColor: [22, 101, 52] },
+      9: { halign: 'right', textColor: [180, 83, 9] },
+      11: { halign: 'center', fontStyle: 'bold' },
     },
     foot: [
-      ['TOTAIS:', '', '', '', `${services.length} ordens`, formatCurrency(totalBilled), '', formatCurrency(totalPaid), formatCurrency(totalRemaining), '', ''],
+      ['TOTAIS:', '', '', '', '', `${services.length} ordens`, formatCurrency(totalBilled), '', formatCurrency(totalPaid), formatCurrency(totalRemaining), '', ''],
     ],
     footStyles: {
       fillColor: [243, 244, 242],

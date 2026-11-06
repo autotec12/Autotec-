@@ -4,6 +4,8 @@ import { TechnicalServiceOrder } from '../../types';
 import { formatCurrency, formatDate } from '../../lib/calculations';
 import { TechnicalServiceModal } from './TechnicalServiceModal';
 import { TechnicalServiceReceiptModal } from './TechnicalServiceReceiptModal';
+import { TechniciansModal } from './TechniciansModal';
+import { ServiceTypesModal } from './ServiceTypesModal';
 import {
   Wrench,
   Plus,
@@ -17,6 +19,8 @@ import {
   AlertCircle,
   Car,
   User,
+  Users,
+  Settings2,
   DollarSign,
   TrendingUp,
 } from 'lucide-react';
@@ -27,6 +31,8 @@ export const TechnicalServicesView: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'pago' | 'parcial' | 'pendente'>('all');
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [showTechniciansModal, setShowTechniciansModal] = useState(false);
+  const [showServiceTypesModal, setShowServiceTypesModal] = useState(false);
   const [orderToEdit, setOrderToEdit] = useState<TechnicalServiceOrder | null>(null);
   const [viewingReceiptOrder, setViewingReceiptOrder] = useState<TechnicalServiceOrder | null>(() => {
     if (selectedDetailItem && selectedDetailItem.type === 'servico_tecnico') {
@@ -81,16 +87,34 @@ export const TechnicalServicesView: React.FC = () => {
           </p>
         </div>
 
-        <button
-          onClick={() => {
-            setOrderToEdit(null);
-            setIsModalOpen(true);
-          }}
-          className="px-4 py-2.5 bg-[#F28C1B] hover:bg-[#DE7B0E] text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition cursor-pointer"
-        >
-          <Plus className="w-4 h-4" />
-          Nova Ordem de Serviço
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setShowTechniciansModal(true)}
+            className="px-3 py-2 bg-white border border-slate-300 hover:border-[#30334F] text-[#30334F] rounded-xl text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
+          >
+            <Users className="w-4 h-4 text-[#F28C1B]" />
+            Técnicos
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowServiceTypesModal(true)}
+            className="px-3 py-2 bg-white border border-slate-300 hover:border-[#30334F] text-[#30334F] rounded-xl text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
+          >
+            <Settings2 className="w-4 h-4 text-[#30334F]" />
+            Tipos de Serviços
+          </button>
+          <button
+            onClick={() => {
+              setOrderToEdit(null);
+              setIsModalOpen(true);
+            }}
+            className="px-4 py-2 bg-[#F28C1B] hover:bg-[#DE7B0E] text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            Nova Ordem de Serviço
+          </button>
+        </div>
       </div>
 
       {/* KPI Cards */}
@@ -362,6 +386,16 @@ export const TechnicalServicesView: React.FC = () => {
             }
           }}
         />
+      )}
+
+      {/* Modal de Gestão de Técnicos Responsáveis */}
+      {showTechniciansModal && (
+        <TechniciansModal onClose={() => setShowTechniciansModal(false)} />
+      )}
+
+      {/* Modal de Gestão de Tipos de Serviços */}
+      {showServiceTypesModal && (
+        <ServiceTypesModal onClose={() => setShowServiceTypesModal(false)} />
       )}
     </div>
   );

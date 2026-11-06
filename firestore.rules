@@ -154,6 +154,30 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // Technicians (Cadastro de Técnicos Responsáveis)
+    match /technicians/{technicianId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(technicianId) &&
+        incoming().name is string && incoming().name.size() > 0 && incoming().name.size() <= 150;
+      allow delete: if isAdmin();
+    }
+
+    // Technical Service Types (Novos tipos de serviços técnicos)
+    match /technical_service_types/{serviceTypeId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(serviceTypeId) &&
+        incoming().name is string && incoming().name.size() > 0 && incoming().name.size() <= 150;
+      allow delete: if isAdmin();
+    }
+
+    // Expense Categories (Novos itens de despesas da empresa)
+    match /expense_categories/{categoryId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(categoryId) &&
+        incoming().name is string && incoming().name.size() > 0 && incoming().name.size() <= 150;
+      allow delete: if isAdmin();
+    }
+
     // Company Expenses (Gastos da Empresa: Apoio, Chips, Sistema, Rastreadores, etc.)
     match /company_expenses/{expenseId} {
       allow read: if isSignedIn();

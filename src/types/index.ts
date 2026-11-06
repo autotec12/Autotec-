@@ -162,9 +162,52 @@ export interface ClientConsolidatedFinancials {
 }
 
 // ==========================================
-// SERVIÇOS TÉCNICOS (Instalação, Retirada, Manutenção, Reinstalação)
 // ==========================================
-export type TechnicalServiceCategory = 'Instalação' | 'Retirada' | 'Manutenção' | 'Reinstalação';
+// TÉCNICOS RESPONSÁVEIS
+// ==========================================
+export interface Technician {
+  id: string;
+  name: string;
+  phone?: string;
+  whatsapp?: string;
+  cpf?: string;
+  address?: string;
+  email?: string;
+  notes?: string;
+  status?: 'ativo' | 'inativo';
+  active?: boolean;
+  createdBy?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+// ==========================================
+// SERVIÇOS TÉCNICOS (Instalação, Retirada, Manutenção, Reinstalação e Novos Tipos)
+// ==========================================
+export const DEFAULT_TECHNICAL_SERVICE_CATEGORIES = [
+  'Instalação',
+  'Retirada',
+  'Manutenção',
+  'Reinstalação',
+] as const;
+
+export type TechnicalServiceCategory =
+  | 'Instalação'
+  | 'Retirada'
+  | 'Manutenção'
+  | 'Reinstalação'
+  | string;
+
+export interface TechnicalServiceType {
+  id: string;
+  name: string;
+  description?: string;
+  status?: 'ativo' | 'inativo';
+  active?: boolean;
+  createdBy?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
 
 export interface TechnicalServiceItem {
   id: string;
@@ -187,6 +230,7 @@ export interface TechnicalServiceOrder {
   vehicleBrand?: string;
   vehicleModel: string;
   vehicleColor?: string;
+  technicianId?: string;
   technicianName?: string;
   items: TechnicalServiceItem[];
   subtotal: number;
@@ -207,18 +251,46 @@ export interface TechnicalServiceOrder {
 // ==========================================
 // GASTOS DA EMPRESA (Despesas e Compras)
 // ==========================================
+export const DEFAULT_EXPENSE_CATEGORIES = [
+  'Chips',
+  'Sistema',
+  'Apoio Rastreamento',
+  'Sensores',
+  'Rastreadores',
+  'Antifurto',
+  'Chicotes',
+  'Relê',
+  'Fita Isolante',
+  'Abraçadeira',
+  'Outros Gastos',
+] as const;
+
 export type ExpenseCategory =
   | 'Apoio Rastreamento'
   | 'Chips'
   | 'Sistema'
   | 'Rastreadores'
   | 'Sensor'
+  | 'Sensores'
   | 'Antifurto'
   | 'Chicotes'
   | 'Relê'
   | 'Fita Isolante'
   | 'Abraçadeira'
-  | 'Outros Gastos';
+  | 'Abraçadeiras'
+  | 'Outros Gastos'
+  | string;
+
+export interface ExpenseCategoryItem {
+  id: string;
+  name: string;
+  description?: string;
+  status?: 'ativo' | 'inativo';
+  active?: boolean;
+  createdBy?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
 
 export interface ExpenseItem {
   id: string;

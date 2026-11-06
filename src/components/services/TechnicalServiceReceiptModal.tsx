@@ -3,7 +3,7 @@ import { TechnicalServiceOrder } from '../../types';
 import { useData } from '../../context/DataContext';
 import { generateTechnicalServiceReceiptSvg } from '../../lib/svgServiceAndExpense';
 import { generateTechnicalServiceReceiptPdf } from '../../lib/pdfDocuments';
-import { downloadSvgFile, shareSvgFile, downloadPdfFile } from '../../lib/exportHelpers';
+import { downloadSvgFile, downloadPdfFile, sharePdfFile } from '../../lib/exportHelpers';
 import { formatCurrency, formatDate } from '../../lib/calculations';
 import {
   FileText,
@@ -30,7 +30,7 @@ export const TechnicalServiceReceiptModal: React.FC<TechnicalServiceReceiptModal
   const { companySettings } = useData();
   const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [downloadingSvg, setDownloadingSvg] = useState(false);
-  const [sharingSvg, setSharingSvg] = useState(false);
+  const [sharingPdf, setSharingPdf] = useState(false);
   const [zoomLevel, setZoomLevel] = useState<number>(100);
   const [feedback, setFeedback] = useState<{
     type: 'success' | 'warning' | 'info' | 'error';
@@ -47,26 +47,27 @@ export const TechnicalServiceReceiptModal: React.FC<TechnicalServiceReceiptModal
     }, 6500);
   };
 
-  // ACTION 1: Compartilhar em SVG
-  const handleShareSvg = async () => {
+  // ACTION 1: Compartilhar em PDF (anexo direto via compartilhamento nativo)
+  const handleSharePdf = async () => {
     try {
-      setSharingSvg(true);
-      const res = await shareSvgFile(
-        svgContent,
-        `${baseFilename}.svg`,
+      setSharingPdf(true);
+      const pdfBlob = generateTechnicalServiceReceiptPdf(order, companySettings);
+      const res = await sharePdfFile(
+        pdfBlob,
+        `${baseFilename}.pdf`,
         `Recibo de Serviço AUTOTEC - ${order.orderNumber}`
       );
       if (res.status === 'shared_intent_opened') {
-        showFeedback('info', res.message);
+        showFeedback('success', res.message);
       } else if (res.status === 'cancelled') {
         showFeedback('info', res.message);
       } else {
         showFeedback('warning', res.message);
       }
     } catch (err: any) {
-      showFeedback('error', 'Falha ao acionar compartilhamento: ' + (err?.message || 'erro desconhecido'));
+      showFeedback('error', 'Falha ao acionar compartilhamento: ' + (err?.message || 'erro'));
     } finally {
-      setSharingSvg(false);
+      setSharingPdf(false);
     }
   };
 
@@ -149,17 +150,6 @@ export const TechnicalServiceReceiptModal: React.FC<TechnicalServiceReceiptModal
           </div>
         )}
 
-        {/* WhatsApp SVG Informative Guidance Strip */}
-        <div className="bg-amber-50/70 border-b border-amber-200/80 px-4 py-2 text-2xs text-amber-900 flex items-start gap-2">
-          <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-          <div className="space-y-0.5">
-            <span className="font-bold">Observação sobre envio de SVG pelo WhatsApp:</span>
-            <p className="text-amber-800">
-              No celular (especialmente Android), o WhatsApp frequentemente não conclui a entrega de arquivos .SVG compartilhados diretamente pelo canal de fotos. Se o arquivo não chegar ao destinatário, utilize o botão <strong>"Baixar em SVG"</strong> e anexe o arquivo no WhatsApp através de <strong>Documento (ícone do Clipe 📎 &gt; Documento)</strong>. O arquivo vetorial original é mantido 100% íntegro.
-            </p>
-          </div>
-        </div>
-
         {/* Action Toolbar: STRICTLY 3 STANDARDIZED ACTIONS */}
         <div className="bg-[#F8FAFC] border-b border-slate-200 px-4 py-3 flex flex-wrap items-center justify-between gap-2 text-xs">
           {/* Zoom controls */}
@@ -190,17 +180,17 @@ export const TechnicalServiceReceiptModal: React.FC<TechnicalServiceReceiptModal
             </button>
           </div>
 
-          {/* STRICTLY 3 ACTIONS */}
+          {/* STANDARDIZED 3 ACTIONS: 1. Compartilhar em PDF, 2. Baixar em SVG, 3. Baixar em PDF */}
           <div className="flex flex-wrap items-center gap-2">
-            {/* 1. Compartilhar em SVG */}
+            {/* 1. Compartilhar em PDF */}
             <button
-              onClick={handleShareSvg}
-              disabled={sharingSvg}
+              onClick={handleSharePdf}
+              disabled={sharingPdf}
               className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold flex items-center gap-2 shadow-xs transition cursor-pointer"
-              title="Compartilhar arquivo SVG oficial"
+              title="Compartilhar arquivo PDF oficial como anexo via WhatsApp, e-mail ou aplicativo nativo"
             >
-              {sharingSvg ? <Loader2 className="w-4 h-4 animate-spin" /> : <Share2 className="w-4 h-4" />}
-              Compartilhar em SVG
+              {sharingPdf ? <Loader2 className="w-4 h-4 animate-spin" /> : <Share2 className="w-4 h-4" />}
+              Compartilhar em PDF
             </button>
 
             {/* 2. Baixar em SVG */}

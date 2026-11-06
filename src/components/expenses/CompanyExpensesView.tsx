@@ -4,6 +4,7 @@ import { CompanyExpense, ExpenseCategory } from '../../types';
 import { formatCurrency, formatDate } from '../../lib/calculations';
 import { CompanyExpenseModal } from './CompanyExpenseModal';
 import { ExpenseVoucherModal } from './ExpenseVoucherModal';
+import { ExpenseCategoriesModal } from './ExpenseCategoriesModal';
 import {
   ShoppingBag,
   Plus,
@@ -19,28 +20,31 @@ import {
   DollarSign,
   TrendingDown,
   Receipt,
+  Package,
 } from 'lucide-react';
 
-const EXPENSE_CATEGORIES: ExpenseCategory[] = [
+const DEFAULT_EXPENSE_CATEGORIES: string[] = [
   'Apoio Rastreamento',
   'Chips',
   'Sistema',
   'Rastreadores',
-  'Sensor',
+  'Sensores',
   'Antifurto',
   'Chicotes',
   'Relê',
   'Fita Isolante',
   'Abraçadeira',
+  'Abraçadeiras',
 ];
 
 export const CompanyExpensesView: React.FC = () => {
-  const { companyExpenses, deleteCompanyExpense, selectedDetailItem, setSelectedDetailItem } = useData();
+  const { companyExpenses, customExpenseCategories, deleteCompanyExpense, selectedDetailItem, setSelectedDetailItem } = useData();
 
   const [searchTerm, setSearchTerm] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'pago' | 'parcial' | 'pendente'>('all');
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [showCategoriesModal, setShowCategoriesModal] = useState(false);
   const [expenseToEdit, setExpenseToEdit] = useState<CompanyExpense | null>(null);
   const [viewingVoucherExpense, setViewingVoucherExpense] = useState<CompanyExpense | null>(() => {
     if (selectedDetailItem && selectedDetailItem.type === 'despesa') {
@@ -48,6 +52,13 @@ export const CompanyExpensesView: React.FC = () => {
     }
     return null;
   });
+
+  const allCategories = useMemo(() => {
+    return Array.from(new Set([
+      ...DEFAULT_EXPENSE_CATEGORIES,
+      ...customExpenseCategories.filter((c) => c.status === 'ativo').map((c) => c.name),
+    ]));
+  }, [customExpenseCategories]);
 
   const filteredExpenses = useMemo(() => {
     return companyExpenses.filter((exp) => {
@@ -95,16 +106,26 @@ export const CompanyExpensesView: React.FC = () => {
           </p>
         </div>
 
-        <button
-          onClick={() => {
-            setExpenseToEdit(null);
-            setIsModalOpen(true);
-          }}
-          className="px-4 py-2.5 bg-[#F28C1B] hover:bg-[#DE7B0E] text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition cursor-pointer"
-        >
-          <Plus className="w-4 h-4" />
-          Nova Despesa / Compra
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setShowCategoriesModal(true)}
+            className="px-3 py-2 bg-white border border-slate-300 hover:border-[#30334F] text-[#30334F] rounded-xl text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
+          >
+            <Package className="w-4 h-4 text-[#F28C1B]" />
+            Itens e Insumos
+          </button>
+          <button
+            onClick={() => {
+              setExpenseToEdit(null);
+              setIsModalOpen(true);
+            }}
+            className="px-4 py-2 bg-[#F28C1B] hover:bg-[#DE7B0E] text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            Nova Despesa / Compra
+          </button>
+        </div>
       </div>
 
       {/* KPI Cards */}
@@ -170,7 +191,7 @@ export const CompanyExpensesView: React.FC = () => {
             className="px-3 py-2 bg-slate-100 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:ring-2 focus:ring-[#F28C1B] outline-hidden"
           >
             <option value="all">Todas as Categorias</option>
-            {EXPENSE_CATEGORIES.map((cat) => (
+            {allCategories.map((cat) => (
               <option key={cat} value={cat}>
                 {cat}
               </option>
@@ -387,6 +408,11 @@ export const CompanyExpensesView: React.FC = () => {
             }
           }}
         />
+      )}
+
+      {/* Modal de Gestão de Itens e Insumos */}
+      {showCategoriesModal && (
+        <ExpenseCategoriesModal onClose={() => setShowCategoriesModal(false)} />
       )}
     </div>
   );
