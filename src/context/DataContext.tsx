@@ -27,6 +27,7 @@ import {
   CompanyExpense,
   ExpenseItem,
   Technician,
+  TechnicianPayment,
   TechnicalServiceType,
   ExpenseCategoryItem,
 } from '../types';
@@ -73,6 +74,7 @@ interface DataContextType {
   // Charge actions
   addCharge: (data: Omit<Charge, 'id' | 'createdAt' | 'updatedAt'>) => Promise<string>;
   updateCharge: (id: string, data: Partial<Charge>) => Promise<void>;
+  deleteCharge: (id: string) => Promise<void>;
   generateMonthlyCharges: (month: string) => Promise<{ created: number; skipped: number }>;
   
   // Payment actions
@@ -97,6 +99,18 @@ interface DataContextType {
   updateTechnician: (id: string, data: Partial<Technician>) => Promise<void>;
   deleteTechnician: (id: string) => Promise<void>;
   toggleTechnicianStatus: (id: string) => Promise<void>;
+
+  // Technician Payments actions (Controle de pagamentos da empresa aos técnicos)
+  technicianPayments: TechnicianPayment[];
+  recordTechnicianPayment: (params: {
+    technicianId: string;
+    technicianName: string;
+    serviceIds: string[];
+    amount: number;
+    paymentDate: string;
+    paymentMethod: 'dinheiro' | 'pix' | string;
+    notes?: string;
+  }) => Promise<string>;
 
   // Technical Service Types actions
   technicalServiceTypes: TechnicalServiceType[];
@@ -198,6 +212,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [technicalServices, setTechnicalServices] = useState<TechnicalServiceOrder[]>([]);
   const [companyExpenses, setCompanyExpenses] = useState<CompanyExpense[]>([]);
   const [technicians, setTechnicians] = useState<Technician[]>([]);
+  const [technicianPayments, setTechnicianPayments] = useState<TechnicianPayment[]>([]);
   const [technicalServiceTypes, setTechnicalServiceTypes] = useState<TechnicalServiceType[]>([]);
   const [customExpenseCategories, setCustomExpenseCategories] = useState<ExpenseCategoryItem[]>([]);
   const [companySettings, setCompanySettings] = useState<CompanySettings>(defaultSettings);
@@ -228,6 +243,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setTechnicalServices([]);
       setCompanyExpenses([]);
       setTechnicians([]);
+      setTechnicianPayments([]);
       setTechnicalServiceTypes([]);
       setCustomExpenseCategories([]);
       setAuditLogs([]);
@@ -425,7 +441,22 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     );
 
-    // 12. Audit Logs
+    // 12. Technician Payments
+    const unsubTechPayments = onSnapshot(
+      collection(db, 'technician_payments'),
+      (snap) => {
+        const list: TechnicianPayment[] = [];
+        snap.forEach((docSnap) => {
+          list.push({ id: docSnap.id, ...docSnap.data() } as TechnicianPayment);
+        });
+        setTechnicianPayments(list.sort((a, b) => (b.paymentDate || '').localeCompare(a.paymentDate || '')));
+      },
+      (error) => {
+        handleSnapshotError(error, OperationType.LIST, 'technician_payments');
+      }
+    );
+
+    // 13. Audit Logs
     const auditQuery = query(collection(db, 'audit_logs'), orderBy('timestamp', 'desc'), limit(50));
     const unsubAudit = onSnapshot(
       auditQuery,
@@ -459,6 +490,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       unsubServices();
       unsubExpenses();
       unsubTechnicians();
+      unsubTechPayments();
       unsubServiceTypes();
       unsubExpCategories();
       unsubAudit();
@@ -777,6 +809,34 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const deleteCharge = async (id: string) => {
+    try {
+      const charge = charges.find((c) => c.id === id);
+      if (!charge) {
+        throw new Error('Cobrança não encontrada.');
+      }
+
+      // Safeguard: Check if there are any linked payments or paid amount > 0
+      const linkedPayments = payments.filter((p) => p.chargeId === id);
+      if ((charge.paidAmount && charge.paidAmount > 0) || linkedPayments.length > 0) {
+        throw new Error(
+          'Não é permitido excluir esta mensalidade pois ela possui registros de pagamentos vinculados. Para preservar a integridade contábil e auditoria financeira, a exclusão de cobranças com pagamentos é bloqueada.'
+        );
+      }
+
+      await deleteDoc(doc(db, 'charges', id));
+      await logAudit(
+        'DELETE',
+        'Charge',
+        id,
+        `Excluiu mensalidade de ${charge.referenceMonth} do veículo ${charge.vehiclePlate} (${charge.clientName}) no valor de R$ ${charge.totalAmount.toFixed(2)}`
+      );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `charges/${id}`);
+      throw error;
+    }
+  };
+
   // Generate Monthly Charges for Active Vehicles
   const generateMonthlyCharges = async (month: string) => {
     let created = 0;
@@ -963,6 +1023,17 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       createdBy: user?.uid || '',
     };
 
+    if (data.technicianFee !== undefined && data.technicianFee !== null) {
+      const techFee = Number(data.technicianFee);
+      const techPaid = Number(data.technicianPaidAmount || 0);
+      const techRem = Math.max(0, techFee - techPaid);
+      const techStatus: 'pendente' | 'parcial' | 'pago' = techPaid >= techFee && techFee > 0 ? 'pago' : techPaid > 0 ? 'parcial' : 'pendente';
+      newOrder.technicianFee = techFee;
+      newOrder.technicianPaidAmount = techPaid;
+      newOrder.technicianRemainingBalance = techRem;
+      newOrder.technicianPaymentStatus = techStatus;
+    }
+
     try {
       await setDoc(doc(db, 'technical_services', id), cleanFirestoreData(newOrder));
       await logAudit('CREATE', 'TechnicalService', id, `Criou a O.S. ${orderNum} para ${data.clientName} (${data.vehiclePlate}) no valor de R$ ${totalAmount.toFixed(2)}`);
@@ -990,7 +1061,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         status = 'parcial';
       }
 
-      const payload = {
+      const payload: any = {
         ...data,
         subtotal,
         discount,
@@ -1000,6 +1071,19 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         status,
         updatedAt: now,
       };
+
+      if (data.technicianFee !== undefined) {
+        const techFee = Number(data.technicianFee);
+        const techPaid = data.technicianPaidAmount !== undefined 
+          ? Number(data.technicianPaidAmount) 
+          : Number(existing?.technicianPaidAmount || 0);
+        const techRem = Math.max(0, techFee - techPaid);
+        const techStatus: 'pendente' | 'parcial' | 'pago' = techPaid >= techFee && techFee > 0 ? 'pago' : techPaid > 0 ? 'parcial' : 'pendente';
+        payload.technicianFee = techFee;
+        payload.technicianPaidAmount = techPaid;
+        payload.technicianRemainingBalance = techRem;
+        payload.technicianPaymentStatus = techStatus;
+      }
 
       await updateDoc(doc(db, 'technical_services', id), cleanFirestoreData(payload));
       await logAudit('UPDATE', 'TechnicalService', id, `Atualizou O.S. ${existing?.orderNumber || id} (${status})`);
@@ -1015,6 +1099,82 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       await logAudit('DELETE', 'TechnicalService', id, `Excluiu O.S. ${existing?.orderNumber || id}`);
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `technical_services/${id}`);
+    }
+  };
+
+  // Record Technician Payment (Controle de quitação para os técnicos prestadores)
+  const recordTechnicianPayment = async (params: {
+    technicianId: string;
+    technicianName: string;
+    serviceIds: string[];
+    amount: number;
+    paymentDate: string;
+    paymentMethod: 'dinheiro' | 'pix' | string;
+    notes?: string;
+  }) => {
+    const id = `tp_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const now = new Date().toISOString();
+    const recNum = `REC-TEC-${now.slice(0, 7).replace('-', '')}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+    const ordersToUpdate = technicalServices.filter((s) => params.serviceIds.includes(s.id));
+    const serviceOrderNumbers = ordersToUpdate.map((o) => o.orderNumber);
+
+    const paymentDoc: TechnicianPayment = {
+      id,
+      technicianId: params.technicianId,
+      technicianName: params.technicianName,
+      serviceIds: params.serviceIds,
+      serviceOrderNumbers,
+      amount: Number(params.amount),
+      paymentDate: params.paymentDate,
+      paymentMethod: params.paymentMethod,
+      receiptNumber: recNum,
+      notes: params.notes || '',
+      createdAt: now,
+      createdBy: user?.uid || '',
+    };
+
+    try {
+      // 1. Gravar comprovante do pagamento ao técnico
+      await setDoc(doc(db, 'technician_payments', id), cleanFirestoreData(paymentDoc));
+
+      // 2. Distribuir baixa proporcional entre as O.S. selecionadas
+      let remainingToDistribute = Number(params.amount);
+
+      for (const service of ordersToUpdate) {
+        if (remainingToDistribute <= 0) break;
+        const currentFee = Number(service.technicianFee || 0);
+        const currentPaid = Number(service.technicianPaidAmount || 0);
+        const currentDue = Math.max(0, currentFee - currentPaid);
+
+        if (currentDue <= 0) continue;
+
+        const payingForThis = Math.min(remainingToDistribute, currentDue);
+        const newPaid = currentPaid + payingForThis;
+        const newRemaining = Math.max(0, currentFee - newPaid);
+        const newStatus: 'pendente' | 'parcial' | 'pago' = newRemaining <= 0.009 ? 'pago' : 'parcial';
+
+        await updateDoc(doc(db, 'technical_services', service.id), cleanFirestoreData({
+          technicianPaidAmount: newPaid,
+          technicianRemainingBalance: newRemaining,
+          technicianPaymentStatus: newStatus,
+          updatedAt: now,
+        }));
+
+        remainingToDistribute -= payingForThis;
+      }
+
+      await logAudit(
+        'CREATE',
+        'TechnicianPayment',
+        id,
+        `Registrou pagamento de R$ ${Number(params.amount).toFixed(2)} ao técnico ${params.technicianName} referente a [${serviceOrderNumbers.join(', ')}]`
+      );
+
+      return id;
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `technician_payments/${id}`);
+      throw error;
     }
   };
 
@@ -1836,6 +1996,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         deleteVehicle,
         addCharge,
         updateCharge,
+        deleteCharge,
         generateMonthlyCharges,
         recordPayment,
         technicalServices,
@@ -1847,6 +2008,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         updateTechnician,
         deleteTechnician,
         toggleTechnicianStatus,
+        technicianPayments,
+        recordTechnicianPayment,
         technicalServiceTypes,
         addTechnicalServiceType,
         updateTechnicalServiceType,

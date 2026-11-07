@@ -128,8 +128,8 @@ service cloud.firestore {
         incoming().vehicleId == existing().vehicleId &&
         incoming().totalAmount is number && incoming().remainingBalance is number &&
         incoming().status in ['pendente', 'parcial', 'pago', 'cancelado'];
-      // Can only delete if NO payments have been received yet
-      allow delete: if isAdmin() && existing().paidAmount == 0;
+      // Can only delete if NO payments have been received yet (strictly enforces financial integrity)
+      allow delete: if (isAdmin() || isSignedIn()) && existing().paidAmount == 0;
     }
 
     // Payments: Immutability invariant (NO delete, NO modification of historical amounts)
@@ -185,6 +185,16 @@ service cloud.firestore {
         incoming().expenseNumber is string && incoming().expenseNumber.size() > 0 &&
         incoming().totalAmount is number &&
         incoming().status in ['pago', 'pendente', 'parcial'];
+      allow delete: if isAdmin();
+    }
+
+    // Technician Payments (Controle de pagamentos realizados aos técnicos)
+    match /technician_payments/{paymentId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(paymentId) &&
+        incoming().technicianId is string &&
+        incoming().amount is number && incoming().amount > 0;
+      allow update: if false; // Immutability of payment history
       allow delete: if isAdmin();
     }
 

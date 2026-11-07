@@ -32,6 +32,8 @@ export interface Client {
   whatsapp: string;
   email?: string;
   address?: string;
+  city?: string;
+  state?: string;
   notes?: string;
   status: ClientStatus;
   planId?: string;
@@ -243,8 +245,29 @@ export interface TechnicalServiceOrder {
   status: 'pendente' | 'parcial' | 'pago';
   receiptNumber: string; // ex: REC-ST-202611-0001
   notes?: string;
+  observations?: string;
+  // Controle financeiro devido ao técnico prestador (obrigação da empresa, independente do cliente)
+  technicianFee?: number; // Valor que a empresa deve pagar ao técnico pelo serviço
+  technicianPaidAmount?: number; // Valor já pago pela empresa ao técnico
+  technicianRemainingBalance?: number; // Saldo que a empresa ainda deve ao técnico
+  technicianPaymentStatus?: 'pendente' | 'parcial' | 'pago'; // Situação do pagamento ao técnico
   createdAt: string;
   updatedAt: string;
+  createdBy?: string;
+}
+
+export interface TechnicianPayment {
+  id: string;
+  technicianId: string;
+  technicianName: string;
+  serviceIds: string[]; // Serviços aos quais o pagamento está relacionado
+  serviceOrderNumbers?: string[]; // Números das ordens de serviço
+  amount: number; // Valor pago
+  paymentDate: string; // YYYY-MM-DD
+  paymentMethod: 'dinheiro' | 'pix' | string;
+  receiptNumber?: string;
+  notes?: string;
+  createdAt: string;
   createdBy?: string;
 }
 

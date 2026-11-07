@@ -37,11 +37,54 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
   const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [downloadingSvg, setDownloadingSvg] = useState(false);
   const [sharingPdf, setSharingPdf] = useState(false);
-  const [zoomLevel, setZoomLevel] = useState<number>(100);
   const [feedback, setFeedback] = useState<{
     type: 'success' | 'warning' | 'info' | 'error';
     message: string;
   } | null>(null);
+
+  const [zoomLevel, setZoomLevel] = useState<number>(100);
+  const containerRef = React.useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState<number>(0);
+
+  // Monitor available container width and orientation changes
+  React.useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    const measureWidth = () => {
+      const style = window.getComputedStyle(el);
+      const pLeft = parseFloat(style.paddingLeft) || 0;
+      const pRight = parseFloat(style.paddingRight) || 0;
+      const available = el.clientWidth - pLeft - pRight;
+      if (available > 0) {
+        setContainerWidth(available);
+      }
+    };
+
+    measureWidth();
+
+    let ro: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(() => {
+        measureWidth();
+      });
+      ro.observe(el);
+    }
+
+    window.addEventListener('resize', measureWidth);
+    window.addEventListener('orientationchange', measureWidth);
+
+    return () => {
+      if (ro) ro.disconnect();
+      window.removeEventListener('resize', measureWidth);
+      window.removeEventListener('orientationchange', measureWidth);
+    };
+  }, []);
+
+  // Base width fits available mobile width, capped at 800px on desktop
+  const baseWidth = containerWidth > 0 ? Math.min(containerWidth, 800) : 800;
+  // Dynamic rendered width based on zoom level
+  const renderedWidth = Math.round(baseWidth * (zoomLevel / 100));
 
   // 1. Resolve Effective Company
   const effectiveCompany = payment.companySnapshot
@@ -111,6 +154,24 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
   };
 
   const svgContent = generateReceiptSvg(payment, effectiveCharge, effectiveClient, effectiveVehicle, effectiveCompany);
+
+  // Sanitize SVG specifically for on-screen preview so it scales responsively without affecting download files
+  const previewSvgContent = React.useMemo(() => {
+    if (!svgContent) return '';
+    return svgContent.replace(/<svg\b([^>]*)>/i, (_match, attrs) => {
+      let cleanAttrs = attrs
+        .replace(/\bwidth="[^"]*"/i, 'width="100%"')
+        .replace(/\bheight="[^"]*"/i, 'height="auto"');
+      if (/\bstyle="([^"]*)"/i.test(cleanAttrs)) {
+        cleanAttrs = cleanAttrs.replace(/\bstyle="([^"]*)"/i, (_: string, s: string) => {
+          return `style="width:100% !important;height:auto !important;display:block !important;max-width:100% !important;${s}"`;
+        });
+      } else {
+        cleanAttrs += ' style="width:100% !important;height:auto !important;display:block !important;max-width:100% !important;"';
+      }
+      return `<svg ${cleanAttrs}>`;
+    });
+  }, [svgContent]);
 
   const rawNumber = payment.receiptNumber || 'recibo';
   const cleanNum = rawNumber.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -187,8 +248,8 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
-      <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full border border-slate-200 overflow-hidden flex flex-col max-h-[92vh]">
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-black/60 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full border border-slate-200 overflow-hidden flex flex-col max-h-[96vh] sm:max-h-[92vh]">
         {/* Modal Header */}
         <div className="bg-[#30334F] text-white px-5 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -306,12 +367,21 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
         </div>
 
         {/* Visual Preview */}
-        <div className="flex-1 overflow-auto p-4 sm:p-6 bg-slate-100 flex justify-center">
-          <div
-            style={{ width: `${zoomLevel}%`, maxWidth: '800px', transition: 'width 0.15s ease' }}
-            className="bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden flex flex-col"
-            dangerouslySetInnerHTML={{ __html: svgContent }}
-          />
+        <div
+          ref={containerRef}
+          className="flex-1 overflow-auto p-2 sm:p-4 md:p-6 bg-slate-100 min-h-0"
+        >
+          <div className="w-fit mx-auto min-w-0 transition-all duration-150 ease-out">
+            <div
+              style={{
+                width: containerWidth > 0 ? `${renderedWidth}px` : '100%',
+                maxWidth: zoomLevel <= 100 ? '800px' : undefined,
+                transition: 'width 0.15s ease',
+              }}
+              className="autotec-receipt-preview bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden [&_svg]:w-full [&_svg]:h-auto [&_svg]:block [&_svg]:max-w-full"
+              dangerouslySetInnerHTML={{ __html: previewSvgContent }}
+            />
+          </div>
         </div>
       </div>
     </div>

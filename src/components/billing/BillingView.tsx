@@ -5,6 +5,7 @@ import { PaymentModal } from './PaymentModal';
 import { ReceiptModal } from '../receipts/ReceiptModal';
 import { WhatsAppModal } from '../whatsapp/WhatsAppModal';
 import { NewChargeModal } from './NewChargeModal';
+import { DeleteChargeModal } from './DeleteChargeModal';
 import {
   formatCurrency,
   formatDate,
@@ -24,6 +25,7 @@ import {
   RefreshCw,
   Plus,
   ShieldAlert,
+  Trash2,
 } from 'lucide-react';
 
 export const BillingView: React.FC = () => {
@@ -41,6 +43,7 @@ export const BillingView: React.FC = () => {
   } | null>(null);
   const [chargeForWhatsApp, setChargeForWhatsApp] = useState<Charge | null>(null);
   const [isNewChargeModalOpen, setIsNewChargeModalOpen] = useState(false);
+  const [chargeToDelete, setChargeToDelete] = useState<Charge | null>(null);
 
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateResult, setGenerateResult] = useState<string | null>(null);
@@ -446,6 +449,15 @@ export const BillingView: React.FC = () => {
                           >
                             <MessageSquare className="w-4 h-4" />
                           </button>
+
+                          {/* Excluir Mensalidade */}
+                          <button
+                            onClick={() => setChargeToDelete(charge)}
+                            title="Excluir Mensalidade"
+                            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -498,6 +510,15 @@ export const BillingView: React.FC = () => {
         <NewChargeModal
           onClose={() => setIsNewChargeModalOpen(false)}
           onSuccess={() => setIsNewChargeModalOpen(false)}
+        />
+      )}
+
+      {/* MODAL: Delete Charge */}
+      {chargeToDelete && (
+        <DeleteChargeModal
+          charge={chargeToDelete}
+          onClose={() => setChargeToDelete(null)}
+          onDeleted={() => setChargeToDelete(null)}
         />
       )}
     </div>

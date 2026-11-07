@@ -89,6 +89,9 @@ export const TechnicalServiceModal: React.FC<TechnicalServiceModalProps> = ({
   const [paidAmount, setPaidAmount] = useState<number>(
     orderToEdit?.paidAmount !== undefined ? orderToEdit.paidAmount : 150
   );
+  const [technicianFee, setTechnicianFee] = useState<number | undefined>(
+    orderToEdit?.technicianFee !== undefined ? orderToEdit.technicianFee : undefined
+  );
   const [notes, setNotes] = useState(orderToEdit?.notes || '');
   const [saving, setSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -240,6 +243,7 @@ export const TechnicalServiceModal: React.FC<TechnicalServiceModalProps> = ({
           discount: Number(discount) || 0,
           paidAmount: Number(paidAmount) || 0,
           paymentDate: paidAmount > 0 ? (orderToEdit.paymentDate || getTodayIsoDate()) : undefined,
+          technicianFee: technicianFee !== undefined ? Number(technicianFee) : undefined,
           notes: notes.trim(),
         });
         onSaved(orderToEdit.id);
@@ -264,6 +268,7 @@ export const TechnicalServiceModal: React.FC<TechnicalServiceModalProps> = ({
           remainingBalance,
           paymentDate: paidAmount > 0 ? getTodayIsoDate() : undefined,
           status,
+          technicianFee: technicianFee !== undefined && Number(technicianFee) > 0 ? Number(technicianFee) : undefined,
           notes: notes.trim(),
         });
         onSaved(newId);
@@ -644,6 +649,74 @@ export const TechnicalServiceModal: React.FC<TechnicalServiceModalProps> = ({
                     </span>
                   </div>
                 </div>
+              </div>
+            </div>
+
+            {/* Controle de Pagamento ao Técnico Prestador (Obrigação da Empresa) */}
+            <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-4 space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                <h4 className="text-xs font-bold text-amber-950 uppercase tracking-wide flex items-center gap-1.5">
+                  <Users className="w-4 h-4 text-[#F28C1B]" />
+                  Pagamento ao Técnico Prestador (Obrigação da Empresa)
+                </h4>
+                <span className="text-2xs text-amber-800 bg-amber-100 px-2 py-0.5 rounded-full font-bold w-fit">
+                  Independente da Cobrança do Cliente
+                </span>
+              </div>
+              <p className="text-2xs text-amber-700 leading-relaxed">
+                Informe o valor devido ao técnico pelo serviço realizado. Este valor não altera o faturamento nem o valor cobrado do cliente.
+              </p>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+                <div>
+                  <label className="text-xs font-bold text-slate-700 block mb-1">
+                    Valor Devido ao Técnico (R$)
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-2.5 top-2 text-xs font-bold text-slate-400">R$</span>
+                    <CurrencyInput
+                      value={technicianFee ?? 0}
+                      onChange={(val) => setTechnicianFee(val)}
+                      placeholder="0,00"
+                      className="w-full pl-8 pr-3 py-2 bg-white border border-amber-300 rounded-xl text-xs font-bold text-right text-amber-900 focus:ring-2 focus:ring-[#F28C1B] outline-hidden"
+                    />
+                  </div>
+                </div>
+
+                {orderToEdit && orderToEdit.technicianFee !== undefined && (
+                  <>
+                    <div>
+                      <label className="text-xs font-bold text-slate-600 block mb-1">
+                        Valor Já Pago ao Técnico
+                      </label>
+                      <div className="px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-emerald-700">
+                        {formatCurrency(orderToEdit.technicianPaidAmount || 0)}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-bold text-slate-600 block mb-1">
+                        Saldo Pendente ao Técnico
+                      </label>
+                      <div className="px-3 py-2 bg-white border border-slate-200 rounded-xl flex items-center justify-between text-xs font-bold">
+                        <span className={(orderToEdit.technicianRemainingBalance || 0) > 0 ? 'text-amber-800' : 'text-slate-500'}>
+                          {formatCurrency(orderToEdit.technicianRemainingBalance || 0)}
+                        </span>
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-2xs uppercase font-extrabold ${
+                            orderToEdit.technicianPaymentStatus === 'pago'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : orderToEdit.technicianPaymentStatus === 'parcial'
+                              ? 'bg-amber-100 text-amber-800'
+                              : 'bg-slate-100 text-slate-800'
+                          }`}
+                        >
+                          {orderToEdit.technicianPaymentStatus || 'pendente'}
+                        </span>
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
 

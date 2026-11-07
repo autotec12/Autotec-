@@ -236,7 +236,14 @@ export const TechnicalServicesView: React.FC = () => {
                         <div className="text-2xs text-slate-400 flex items-center gap-1 mt-0.5">
                           {formatDate(order.executionDate || order.createdAt)}
                           {order.technicianName && (
-                            <span className="truncate max-w-[120px]">• {order.technicianName}</span>
+                            <span className="truncate max-w-[180px]">
+                              • Téc: {order.technicianName}
+                              {order.technicianFee !== undefined && order.technicianFee > 0 && (
+                                <span className={`ml-1 font-bold ${order.technicianPaymentStatus === 'pago' ? 'text-emerald-600' : 'text-amber-600'}`}>
+                                  ({formatCurrency(order.technicianFee)})
+                                </span>
+                              )}
+                            </span>
                           )}
                         </div>
                       </td>

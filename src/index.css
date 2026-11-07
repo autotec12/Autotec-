@@ -243,3 +243,16 @@ body {
   align-items: center;
   gap: 0.25rem;
 }
+
+/* Responsive Receipt Preview Standard */
+.autotec-receipt-preview {
+  display: block;
+  width: 100%;
+}
+
+.autotec-receipt-preview svg {
+  display: block !important;
+  width: 100% !important;
+  height: auto !important;
+  max-width: 100% !important;
+}

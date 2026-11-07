@@ -8,6 +8,8 @@ import {
   CompanySettings,
   TechnicalServiceOrder,
   CompanyExpense,
+  Technician,
+  TechnicianPayment,
 } from '../types';
 import { formatCurrency, formatDate, formatDateTime } from './calculations';
 import { AUTOTEC_LOGO_ORIGINAL_DATA_URI } from '../assets/autotecLogos';
@@ -837,6 +839,7 @@ export function generateMonthlyChargesReportPdf(
   filters: ReportFilterOptions
 ): Blob {
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const todayStr = new Date().toISOString().slice(0, 10);
 
   let startY = drawHeader(doc, 'Relatório Analítico de Mensalidades e Cobranças', company, `Período: ${filters.periodLabel}`);
 
@@ -851,26 +854,46 @@ export function generateMonthlyChargesReportPdf(
 
   startY += 4;
 
-  const rows = charges.map((c) => [
-    c.clientName,
-    c.vehiclePlate,
-    c.vehicleModel || 'Veículo',
-    c.referenceMonth,
-    formatDate(c.dueDate),
-    formatCurrency(c.originalMonthlyValue),
-    formatCurrency(c.totalAmount),
-    formatCurrency(c.paidAmount),
-    formatCurrency(c.remainingBalance),
-    c.status.toUpperCase(),
-  ]);
+  const rows = charges.map((c) => {
+    const isPaid = (c.remainingBalance <= 0.009) || (c.status === 'pago');
+    const isPartial = !isPaid && (c.paidAmount > 0 || c.status === 'parcial');
+    const isOverdue = !isPaid && !isPartial && (c.dueDate < todayStr);
+    const situation = isPaid ? 'PAGA' : isPartial ? 'PARCIAL' : isOverdue ? 'VENCIDA' : 'PENDENTE';
 
+    const linked = payments.filter((p) => p.chargeId === c.id).sort((a, b) => (a.paymentDate || '').localeCompare(b.paymentDate || ''));
+    let paymentInfo = '-';
+    if (isPaid) {
+      paymentInfo = linked.length > 0 ? `Pago em ${formatDate(linked[linked.length - 1].paymentDate)}` : 'Quitado';
+    } else if (isPartial) {
+      if (linked.length > 0) {
+        paymentInfo = linked.map((p) => `${formatDate(p.paymentDate)}: ${formatCurrency(p.amount)}`).join('; ');
+      } else {
+        paymentInfo = `Pago: ${formatCurrency(c.paidAmount)}`;
+      }
+    }
+
+    return [
+      c.clientName,
+      `${c.vehiclePlate} (${c.vehicleModel || 'Veículo'})`,
+      c.referenceMonth,
+      formatDate(c.dueDate),
+      formatCurrency(c.originalMonthlyValue),
+      formatCurrency(c.totalAmount),
+      formatCurrency(c.paidAmount),
+      formatCurrency(c.remainingBalance),
+      situation,
+      paymentInfo,
+    ];
+  });
+
+  const totalOriginal = charges.reduce((acc, c) => acc + (c.originalMonthlyValue || 0), 0);
   const totalContracted = charges.reduce((acc, c) => acc + (c.totalAmount || 0), 0);
   const totalPaid = charges.reduce((acc, c) => acc + (c.paidAmount || 0), 0);
   const totalRemaining = charges.reduce((acc, c) => acc + (c.remainingBalance || 0), 0);
 
   autoTable(doc, {
     startY,
-    head: [['CLIENTE', 'PLACA', 'MODELO', 'COMPETÊNCIA', 'VENCIMENTO', 'VALOR ORIGINAL', 'VALOR COBRADO', 'VALOR PAGO', 'SALDO DEVEDOR', 'SITUAÇÃO']],
+    head: [['CLIENTE', 'VEÍCULO / PLACA', 'COMPETÊNCIA', 'VENCIMENTO', 'VALOR ORIGINAL', 'TOTAL COBRADO', 'VALOR PAGO', 'SALDO RESTANTE', 'SITUAÇÃO', 'PAGAMENTO / HISTÓRICO']],
     body: rows,
     theme: 'grid',
     headStyles: {
@@ -884,16 +907,19 @@ export function generateMonthlyChargesReportPdf(
       textColor: [30, 41, 59],
     },
     columnStyles: {
-      0: { fontStyle: 'bold' },
-      1: { fontStyle: 'bold' },
-      5: { halign: 'right' },
-      6: { halign: 'right', fontStyle: 'bold' },
-      7: { halign: 'right', textColor: [22, 101, 52] },
-      8: { halign: 'right', textColor: [180, 83, 9] },
-      9: { halign: 'center', fontStyle: 'bold' },
+      0: { fontStyle: 'bold', cellWidth: 38 },
+      1: { cellWidth: 32 },
+      2: { cellWidth: 20, halign: 'center' },
+      3: { cellWidth: 20, halign: 'center' },
+      4: { halign: 'right', cellWidth: 22 },
+      5: { halign: 'right', fontStyle: 'bold', cellWidth: 22 },
+      6: { halign: 'right', textColor: [22, 101, 52], cellWidth: 22 },
+      7: { halign: 'right', textColor: [180, 83, 9], cellWidth: 22 },
+      8: { halign: 'center', fontStyle: 'bold', cellWidth: 20 },
+      9: { cellWidth: 'auto', fontSize: 6.5 },
     },
     foot: [
-      ['TOTAIS:', '', '', `${charges.length} cobranças`, '', '', formatCurrency(totalContracted), formatCurrency(totalPaid), formatCurrency(totalRemaining), ''],
+      ['TOTAIS:', `${charges.length} cobranças`, '', '', formatCurrency(totalOriginal), formatCurrency(totalContracted), formatCurrency(totalPaid), formatCurrency(totalRemaining), '', ''],
     ],
     footStyles: {
       fillColor: [243, 244, 242],
@@ -1046,6 +1072,557 @@ export function generateVehiclesReportPdf(
       textColor: [48, 51, 79],
       fontStyle: 'bold',
       fontSize: 8,
+    },
+  });
+
+  drawFooter(doc, company);
+  return doc.output('blob');
+}
+
+/**
+ * 4.5 Relatório de Histórico Individual e Extrato Cronológico do Cliente em PDF
+ */
+export function generateClientDossierPdf(
+  client: Client,
+  vehicles: Vehicle[],
+  charges: Charge[],
+  services: TechnicalServiceOrder[],
+  payments: Payment[],
+  company: CompanySettings
+): Blob {
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const pageWidth = doc.internal.pageSize.getWidth();
+
+  let startY = drawHeader(doc, 'Dossiê Financeiro e Histórico Individual do Cliente', company, `Cliente: ${client.name}`);
+
+  // Client Info Box
+  doc.setFillColor(COLOR_GRAY_BG[0], COLOR_GRAY_BG[1], COLOR_GRAY_BG[2]);
+  doc.roundedRect(14, startY, pageWidth - 28, 26, 2, 2, 'F');
+  doc.setDrawColor(226, 232, 240);
+  doc.roundedRect(14, startY, pageWidth - 28, 26, 2, 2, 'S');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.setTextColor(COLOR_ORANGE[0], COLOR_ORANGE[1], COLOR_ORANGE[2]);
+  doc.text('DADOS CADASTRAIS DO CLIENTE', 18, startY + 5.5);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.setTextColor(COLOR_TEXT[0], COLOR_TEXT[1], COLOR_TEXT[2]);
+  doc.text(client.name, 18, startY + 12);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.setTextColor(COLOR_MUTED[0], COLOR_MUTED[1], COLOR_MUTED[2]);
+  doc.text(`CPF / CNPJ: ${client.document || 'Não informado'}`, 18, startY + 17);
+  doc.text(`Telefone / WhatsApp: ${client.whatsapp || client.phone || 'Não informado'}`, 18, startY + 22);
+
+  doc.text(`E-mail: ${client.email || 'Não informado'}`, pageWidth / 2, startY + 12);
+  doc.text(`Endereço: ${client.address || 'Não informado'}`, pageWidth / 2, startY + 17);
+  const vehiclesStr = vehicles.map((v) => `${v.plate} (${v.brand} ${v.model} - ${formatCurrency(v.monthlyValue)}/mês)`).join('; ') || 'Nenhum veículo';
+  doc.text(`Veículos & Planos: ${vehiclesStr}`, pageWidth / 2, startY + 22);
+
+  startY += 32;
+
+  // Financial Breakdown Box (Strictly separated: Mensalidades vs Serviços)
+  const totalChargesBilled = charges.reduce((acc, c) => acc + (c.totalAmount || 0), 0);
+  const totalChargesPaid = charges.reduce((acc, c) => acc + (c.paidAmount || 0), 0);
+  const totalChargesRemaining = charges.reduce((acc, c) => acc + (c.remainingBalance || 0), 0);
+
+  const totalServicesBilled = services.reduce((acc, s) => acc + (s.totalAmount || 0), 0);
+  const totalServicesPaid = services.reduce((acc, s) => acc + (s.paidAmount || 0), 0);
+  const totalServicesRemaining = services.reduce((acc, s) => acc + (s.remainingBalance || 0), 0);
+
+  const totalGeneralPaid = totalChargesPaid + totalServicesPaid;
+  const totalGeneralRemaining = totalChargesRemaining + totalServicesRemaining;
+
+  doc.setFillColor(255, 255, 255);
+  doc.setDrawColor(203, 213, 225);
+
+  // Card 1: Mensalidades
+  doc.roundedRect(14, startY, 86, 20, 2, 2, 'FD');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.5);
+  doc.setTextColor(COLOR_NAVY[0], COLOR_NAVY[1], COLOR_NAVY[2]);
+  doc.text('MENSALIDADES DE RASTREAMENTO', 18, startY + 5);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.setTextColor(COLOR_MUTED[0], COLOR_MUTED[1], COLOR_MUTED[2]);
+  doc.text(`Total Lançado: ${formatCurrency(totalChargesBilled)}`, 18, startY + 10);
+  doc.text(`Recebido: ${formatCurrency(totalChargesPaid)}`, 18, startY + 14);
+  doc.setTextColor(totalChargesRemaining > 0 ? 180 : 100, totalChargesRemaining > 0 ? 83 : 116, totalChargesRemaining > 0 ? 9 : 139);
+  doc.setFont('helvetica', 'bold');
+  doc.text(`Pendente: ${formatCurrency(totalChargesRemaining)}`, 18, startY + 18);
+
+  // Card 2: Serviços Técnicos
+  doc.roundedRect(104, startY, 86, 20, 2, 2, 'FD');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.5);
+  doc.setTextColor(COLOR_NAVY[0], COLOR_NAVY[1], COLOR_NAVY[2]);
+  doc.text('SERVIÇOS TÉCNICOS / ORDENS DE SERVIÇO', 108, startY + 5);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.setTextColor(COLOR_MUTED[0], COLOR_MUTED[1], COLOR_MUTED[2]);
+  doc.text(`Total Cobrado: ${formatCurrency(totalServicesBilled)}`, 108, startY + 10);
+  doc.text(`Recebido: ${formatCurrency(totalServicesPaid)}`, 108, startY + 14);
+  doc.setTextColor(totalServicesRemaining > 0 ? 180 : 100, totalServicesRemaining > 0 ? 83 : 116, totalServicesRemaining > 0 ? 9 : 139);
+  doc.setFont('helvetica', 'bold');
+  doc.text(`Pendente: ${formatCurrency(totalServicesRemaining)}`, 108, startY + 18);
+
+  // Card 3: Posição Geral Consolidada
+  doc.roundedRect(194, startY, pageWidth - 208, 20, 2, 2, 'FD');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.5);
+  doc.setTextColor(COLOR_ORANGE[0], COLOR_ORANGE[1], COLOR_ORANGE[2]);
+  doc.text('POSIÇÃO FINANCEIRA GERAL DO CLIENTE', 198, startY + 5);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.setTextColor(22, 101, 52);
+  doc.text(`Total Efetivamente Quitado: ${formatCurrency(totalGeneralPaid)}`, 198, startY + 11);
+  doc.setTextColor(totalGeneralRemaining > 0 ? 190 : 100, totalGeneralRemaining > 0 ? 24 : 116, totalGeneralRemaining > 0 ? 24 : 139);
+  doc.setFont('helvetica', 'bold');
+  doc.text(`Saldo Total em Aberto: ${formatCurrency(totalGeneralRemaining)}`, 198, startY + 17);
+
+  startY += 26;
+
+  // 1. Tabela de Mensalidades
+  const chargeRows = charges.map((c) => {
+    const isPaid = (c.remainingBalance <= 0.009) || (c.status === 'pago');
+    const isPartial = !isPaid && (c.paidAmount > 0 || c.status === 'parcial');
+    const isOverdue = !isPaid && !isPartial && (c.dueDate < todayStr);
+    const situation = isPaid ? 'PAGA' : isPartial ? 'PARCIAL' : isOverdue ? 'VENCIDA' : 'PENDENTE';
+
+    const linked = payments.filter((p) => p.chargeId === c.id);
+    let pInfo = '-';
+    if (isPaid) {
+      pInfo = linked.length > 0 ? formatDate(linked[linked.length - 1].paymentDate) : 'Quitado';
+    } else if (isPartial && linked.length > 0) {
+      pInfo = linked.map((p) => `${formatDate(p.paymentDate)} (${formatCurrency(p.amount)})`).join('; ');
+    }
+
+    return [
+      c.referenceMonth,
+      formatDate(c.dueDate),
+      c.vehiclePlate,
+      formatCurrency(c.originalMonthlyValue),
+      formatCurrency(c.totalAmount),
+      formatCurrency(c.paidAmount),
+      formatCurrency(c.remainingBalance),
+      situation,
+      pInfo,
+    ];
+  });
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.setTextColor(COLOR_NAVY[0], COLOR_NAVY[1], COLOR_NAVY[2]);
+  doc.text('1. HISTÓRICO DE MENSALIDADES DE RASTREAMENTO', 14, startY - 1);
+
+  autoTable(doc, {
+    startY,
+    head: [['COMPETÊNCIA', 'VENCIMENTO', 'PLACA', 'VALOR ORIGINAL', 'VALOR COBRADO', 'VALOR PAGO', 'SALDO RESTANTE', 'SITUAÇÃO', 'PAGAMENTOS']],
+    body: chargeRows.length > 0 ? chargeRows : [['Sem mensalidades cadastradas', '', '', '', '', '', '', '', '']],
+    theme: 'grid',
+    headStyles: {
+      fillColor: [48, 51, 79],
+      textColor: [255, 255, 255],
+      fontStyle: 'bold',
+      fontSize: 7,
+    },
+    bodyStyles: {
+      fontSize: 6.5,
+      textColor: [30, 41, 59],
+    },
+    columnStyles: {
+      0: { fontStyle: 'bold', halign: 'center' },
+      1: { halign: 'center' },
+      2: { fontStyle: 'bold' },
+      3: { halign: 'right' },
+      4: { halign: 'right', fontStyle: 'bold' },
+      5: { halign: 'right', textColor: [22, 101, 52] },
+      6: { halign: 'right', textColor: [180, 83, 9] },
+      7: { halign: 'center', fontStyle: 'bold' },
+      8: { fontSize: 6 },
+    },
+  });
+
+  startY = (doc as any).lastAutoTable.finalY + 8;
+
+  // 2. Tabela de Serviços Técnicos
+  if (startY > doc.internal.pageSize.getHeight() - 40) {
+    doc.addPage();
+    startY = drawHeader(doc, 'Dossiê Financeiro do Cliente (Continuação)', company, `Cliente: ${client.name}`);
+  }
+
+  const serviceRows = services.map((s) => [
+    s.orderNumber,
+    formatDate(s.executionDate || s.createdAt),
+    s.items.map((i) => i.category).join(', ') || 'Serviço',
+    s.vehiclePlate,
+    s.technicianName || '-',
+    s.items.map((i) => i.description).join('; ') || '-',
+    formatCurrency(s.totalAmount),
+    formatCurrency(s.paidAmount),
+    formatCurrency(s.remainingBalance),
+    s.status.toUpperCase(),
+  ]);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.setTextColor(COLOR_NAVY[0], COLOR_NAVY[1], COLOR_NAVY[2]);
+  doc.text('2. HISTÓRICO DE SERVIÇOS TÉCNICOS E ORDENS DE SERVIÇO', 14, startY - 1);
+
+  autoTable(doc, {
+    startY,
+    head: [['O.S.', 'DATA', 'TIPO SERVIÇO', 'PLACA', 'TÉCNICO', 'DESCRIÇÃO', 'VALOR COBRADO', 'VALOR RECEBIDO', 'SALDO PENDENTE', 'SITUAÇÃO']],
+    body: serviceRows.length > 0 ? serviceRows : [['Nenhum serviço técnico cadastrado', '', '', '', '', '', '', '', '', '']],
+    theme: 'grid',
+    headStyles: {
+      fillColor: [48, 51, 79],
+      textColor: [255, 255, 255],
+      fontStyle: 'bold',
+      fontSize: 7,
+    },
+    bodyStyles: {
+      fontSize: 6.5,
+      textColor: [30, 41, 59],
+    },
+    columnStyles: {
+      0: { fontStyle: 'bold' },
+      1: { halign: 'center' },
+      6: { halign: 'right', fontStyle: 'bold' },
+      7: { halign: 'right', textColor: [22, 101, 52] },
+      8: { halign: 'right', textColor: [180, 83, 9] },
+      9: { halign: 'center', fontStyle: 'bold' },
+    },
+  });
+
+  startY = (doc as any).lastAutoTable.finalY + 8;
+
+  // 3. Extrato Cronológico Unificado
+  if (startY > doc.internal.pageSize.getHeight() - 40) {
+    doc.addPage();
+    startY = drawHeader(doc, 'Dossiê Financeiro do Cliente (Extrato Cronológico)', company, `Cliente: ${client.name}`);
+  }
+
+  // Unified Chronological events
+  interface TimelineEvent {
+    date: string;
+    type: string;
+    ref: string;
+    plate: string;
+    description: string;
+    inflow: number; // Entrada / Recebimento
+    outflow: number; // Débito lançado / Saldo
+  }
+
+  const events: TimelineEvent[] = [];
+
+  // Add charges launches
+  charges.forEach((c) => {
+    events.push({
+      date: c.dueDate || c.createdAt.slice(0, 10),
+      type: 'Mensalidade Lançada',
+      ref: `Competência ${c.referenceMonth}`,
+      plate: c.vehiclePlate,
+      description: `Fatura de rastreamento veicular (${c.vehicleModel || 'Veículo'})`,
+      inflow: 0,
+      outflow: c.totalAmount,
+    });
+  });
+
+  // Add payments
+  payments.filter((p) => p.clientId === client.id).forEach((p) => {
+    events.push({
+      date: p.paymentDate || p.createdAt.slice(0, 10),
+      type: 'Pagamento de Mensalidade',
+      ref: `Recibo #${p.receiptNumber}`,
+      plate: p.vehiclePlate || '-',
+      description: `Baixa de mensalidade via ${(p.paymentMethod || 'PIX').toUpperCase()}`,
+      inflow: p.amount,
+      outflow: 0,
+    });
+  });
+
+  // Add services
+  services.forEach((s) => {
+    events.push({
+      date: (s.executionDate || s.createdAt).slice(0, 10),
+      type: 'Ordem de Serviço (Cobrança)',
+      ref: s.orderNumber,
+      plate: s.vehiclePlate,
+      description: s.items.map((i) => i.description).join('; ') || 'Serviço técnico realizado',
+      inflow: 0,
+      outflow: s.totalAmount,
+    });
+
+    if (s.paidAmount > 0) {
+      events.push({
+        date: s.paymentDate || (s.executionDate || s.createdAt).slice(0, 10),
+        type: 'Recebimento de O.S.',
+        ref: `Recibo O.S. #${s.receiptNumber}`,
+        plate: s.vehiclePlate,
+        description: `Recebimento de serviço técnico via ${(s.paymentMethod || 'PIX').toUpperCase()}`,
+        inflow: s.paidAmount,
+        outflow: 0,
+      });
+    }
+  });
+
+  // Sort descending by date
+  events.sort((a, b) => b.date.localeCompare(a.date));
+
+  const timelineRows = events.map((ev) => [
+    formatDate(ev.date),
+    ev.type,
+    ev.ref,
+    ev.plate,
+    ev.description,
+    ev.inflow > 0 ? formatCurrency(ev.inflow) : '-',
+    ev.outflow > 0 ? formatCurrency(ev.outflow) : '-',
+  ]);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.setTextColor(COLOR_NAVY[0], COLOR_NAVY[1], COLOR_NAVY[2]);
+  doc.text('3. EXTRATO CRONOLÓGICO UNIFICADO (HISTÓRICO FINANCEIRO INTEGRAL)', 14, startY - 1);
+
+  autoTable(doc, {
+    startY,
+    head: [['DATA', 'OPERAÇÃO', 'REFERÊNCIA', 'PLACA', 'DETALHES / HISTÓRICO', 'ENTRADA / PAGO (+)', 'VALOR LANÇADO (-)']],
+    body: timelineRows.length > 0 ? timelineRows : [['Nenhum lançamento no extrato', '', '', '', '', '', '']],
+    theme: 'grid',
+    headStyles: {
+      fillColor: [48, 51, 79],
+      textColor: [255, 255, 255],
+      fontStyle: 'bold',
+      fontSize: 7,
+    },
+    bodyStyles: {
+      fontSize: 6.5,
+      textColor: [30, 41, 59],
+    },
+    columnStyles: {
+      0: { halign: 'center', fontStyle: 'bold' },
+      1: { fontStyle: 'bold' },
+      2: { fontStyle: 'normal' },
+      5: { halign: 'right', textColor: [22, 101, 52], fontStyle: 'bold' },
+      6: { halign: 'right', textColor: [180, 83, 9] },
+    },
+  });
+
+  drawFooter(doc, company);
+  return doc.output('blob');
+}
+
+/**
+ * 4.6 Relatório de Controle Individual e Pagamentos de Técnicos em PDF
+ */
+export function generateTechnicianDossierPdf(
+  technician: Technician,
+  services: TechnicalServiceOrder[],
+  payments: TechnicianPayment[],
+  company: CompanySettings,
+  periodLabel: string
+): Blob {
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const pageWidth = doc.internal.pageSize.getWidth();
+
+  let startY = drawHeader(doc, 'Relatório Individual de Serviços e Pagamentos do Técnico', company, `Técnico: ${technician.name}`);
+
+  // Technician Info Box
+  doc.setFillColor(COLOR_GRAY_BG[0], COLOR_GRAY_BG[1], COLOR_GRAY_BG[2]);
+  doc.roundedRect(14, startY, pageWidth - 28, 24, 2, 2, 'F');
+  doc.setDrawColor(226, 232, 240);
+  doc.roundedRect(14, startY, pageWidth - 28, 24, 2, 2, 'S');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.setTextColor(COLOR_ORANGE[0], COLOR_ORANGE[1], COLOR_ORANGE[2]);
+  doc.text('DADOS DO TÉCNICO RESPONSÁVEL', 18, startY + 5.5);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.setTextColor(COLOR_TEXT[0], COLOR_TEXT[1], COLOR_TEXT[2]);
+  doc.text(technician.name, 18, startY + 11.5);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.setTextColor(COLOR_MUTED[0], COLOR_MUTED[1], COLOR_MUTED[2]);
+  doc.text(`CPF: ${technician.cpf || 'Não informado'} • Telefone/WhatsApp: ${technician.whatsapp || technician.phone || 'Não informado'}`, 18, startY + 16.5);
+  doc.text(`Endereço: ${technician.address || 'Não informado'} • Período Consultado: ${periodLabel}`, 18, startY + 21);
+
+  startY += 29;
+
+  // Financial Summary Cards
+  const totalDue = services.reduce((acc, s) => acc + (s.technicianFee || 0), 0);
+  const totalPaid = services.reduce((acc, s) => acc + (s.technicianPaidAmount || 0), 0);
+  const totalPending = services.reduce((acc, s) => acc + (s.technicianRemainingBalance || Math.max(0, (s.technicianFee || 0) - (s.technicianPaidAmount || 0))), 0);
+
+  doc.setFillColor(255, 255, 255);
+  doc.setDrawColor(203, 213, 225);
+
+  // Card 1
+  doc.roundedRect(14, startY, 60, 16, 2, 2, 'FD');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7);
+  doc.setTextColor(COLOR_MUTED[0], COLOR_MUTED[1], COLOR_MUTED[2]);
+  doc.text('SERVIÇOS PRESTADOS', 18, startY + 5);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(COLOR_NAVY[0], COLOR_NAVY[1], COLOR_NAVY[2]);
+  doc.text(`${services.length} ordens de serviço`, 18, startY + 12);
+
+  // Card 2
+  doc.roundedRect(78, startY, 60, 16, 2, 2, 'FD');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7);
+  doc.setTextColor(COLOR_MUTED[0], COLOR_MUTED[1], COLOR_MUTED[2]);
+  doc.text('VALOR TOTAL DEVIDO AO TÉCNICO', 82, startY + 5);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(COLOR_NAVY[0], COLOR_NAVY[1], COLOR_NAVY[2]);
+  doc.text(formatCurrency(totalDue), 82, startY + 12);
+
+  // Card 3
+  doc.roundedRect(142, startY, 60, 16, 2, 2, 'FD');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7);
+  doc.setTextColor(COLOR_MUTED[0], COLOR_MUTED[1], COLOR_MUTED[2]);
+  doc.text('VALOR JÁ PAGO PELA EMPRESA', 146, startY + 5);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(22, 101, 52);
+  doc.text(formatCurrency(totalPaid), 146, startY + 12);
+
+  // Card 4
+  doc.roundedRect(206, startY, pageWidth - 220, 16, 2, 2, 'FD');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7);
+  doc.setTextColor(COLOR_MUTED[0], COLOR_MUTED[1], COLOR_MUTED[2]);
+  doc.text('SALDO PENDENTE A PAGAR', 210, startY + 5);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(totalPending > 0 ? 180 : 100, totalPending > 0 ? 83 : 116, totalPending > 0 ? 9 : 139);
+  doc.text(formatCurrency(totalPending), 210, startY + 12);
+
+  startY += 22;
+
+  // Services table
+  const serviceRows = services.map((s) => {
+    const fee = s.technicianFee !== undefined ? formatCurrency(s.technicianFee) : 'Não definido';
+    const paid = s.technicianPaidAmount !== undefined ? formatCurrency(s.technicianPaidAmount) : 'R$ 0,00';
+    const rem = s.technicianRemainingBalance !== undefined ? formatCurrency(s.technicianRemainingBalance) : fee;
+    const st = (s.technicianPaymentStatus || 'pendente').toUpperCase();
+
+    return [
+      s.orderNumber,
+      formatDate(s.executionDate || s.createdAt),
+      s.clientName,
+      `${s.vehiclePlate} (${s.vehicleModel})`,
+      s.items.map((i) => i.category).join(', '),
+      s.items.map((i) => i.description).join('; '),
+      formatCurrency(s.totalAmount),
+      fee,
+      paid,
+      rem,
+      st,
+    ];
+  });
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.setTextColor(COLOR_NAVY[0], COLOR_NAVY[1], COLOR_NAVY[2]);
+  doc.text('1. SERVIÇOS TÉCNICOS PRESTADOS E VALORES DEVIDOS', 14, startY - 1);
+
+  autoTable(doc, {
+    startY,
+    head: [['O.S.', 'DATA', 'CLIENTE', 'VEÍCULO', 'TIPO', 'DESCRIÇÃO', 'COBRADO DO CLIENTE', 'DEVIDO AO TÉCNICO', 'PAGO AO TÉCNICO', 'SALDO PENDENTE', 'STATUS PGTO']],
+    body: serviceRows.length > 0 ? serviceRows : [['Nenhum serviço registrado para este técnico', '', '', '', '', '', '', '', '', '', '']],
+    theme: 'grid',
+    headStyles: {
+      fillColor: [48, 51, 79],
+      textColor: [255, 255, 255],
+      fontStyle: 'bold',
+      fontSize: 7,
+    },
+    bodyStyles: {
+      fontSize: 6.5,
+      textColor: [30, 41, 59],
+    },
+    columnStyles: {
+      0: { fontStyle: 'bold' },
+      1: { halign: 'center' },
+      6: { halign: 'right' },
+      7: { halign: 'right', fontStyle: 'bold' },
+      8: { halign: 'right', textColor: [22, 101, 52] },
+      9: { halign: 'right', textColor: [180, 83, 9] },
+      10: { halign: 'center', fontStyle: 'bold' },
+    },
+    foot: [
+      ['TOTAIS:', `${services.length} serviços`, '', '', '', '', '', formatCurrency(totalDue), formatCurrency(totalPaid), formatCurrency(totalPending), ''],
+    ],
+    footStyles: {
+      fillColor: [243, 244, 242],
+      textColor: [48, 51, 79],
+      fontStyle: 'bold',
+      fontSize: 7.5,
+    },
+  });
+
+  startY = (doc as any).lastAutoTable.finalY + 8;
+
+  // Payments History table
+  if (startY > doc.internal.pageSize.getHeight() - 40) {
+    doc.addPage();
+    startY = drawHeader(doc, 'Relatório Individual do Técnico (Pagamentos Realizados)', company, `Técnico: ${technician.name}`);
+  }
+
+  const paymentRows = payments.map((p) => [
+    formatDate(p.paymentDate || p.createdAt),
+    p.receiptNumber || `REC-${p.id.slice(-6)}`,
+    (p.serviceOrderNumbers && p.serviceOrderNumbers.length > 0) ? p.serviceOrderNumbers.join(', ') : 'Serviços do Técnico',
+    (p.paymentMethod || 'PIX').replace('_', ' ').toUpperCase(),
+    formatCurrency(p.amount),
+    p.notes || '-',
+  ]);
+
+  const totalPaymentsMade = payments.reduce((acc, p) => acc + (p.amount || 0), 0);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.setTextColor(COLOR_NAVY[0], COLOR_NAVY[1], COLOR_NAVY[2]);
+  doc.text('2. HISTÓRICO DE PAGAMENTOS REALIZADOS PELA EMPRESA AO TÉCNICO', 14, startY - 1);
+
+  autoTable(doc, {
+    startY,
+    head: [['DATA', 'COMPROVANTE', 'ORDENS DE SERVIÇO VINCULADAS', 'FORMA DE PGTO', 'VALOR PAGO (R$)', 'OBSERVAÇÕES']],
+    body: paymentRows.length > 0 ? paymentRows : [['Nenhum pagamento registrado no período', '', '', '', '', '']],
+    theme: 'grid',
+    headStyles: {
+      fillColor: [48, 51, 79],
+      textColor: [255, 255, 255],
+      fontStyle: 'bold',
+      fontSize: 7,
+    },
+    bodyStyles: {
+      fontSize: 6.5,
+      textColor: [30, 41, 59],
+    },
+    columnStyles: {
+      0: { halign: 'center', fontStyle: 'bold' },
+      1: { fontStyle: 'bold' },
+      4: { halign: 'right', fontStyle: 'bold', textColor: [22, 101, 52] },
+    },
+    foot: [
+      ['TOTAIS:', `${payments.length} comprovantes`, '', '', formatCurrency(totalPaymentsMade), ''],
+    ],
+    footStyles: {
+      fillColor: [243, 244, 242],
+      textColor: [48, 51, 79],
+      fontStyle: 'bold',
+      fontSize: 7.5,
     },
   });
 
