@@ -251,21 +251,45 @@ export interface TechnicalServiceOrder {
   technicianPaidAmount?: number; // Valor já pago pela empresa ao técnico
   technicianRemainingBalance?: number; // Saldo que a empresa ainda deve ao técnico
   technicianPaymentStatus?: 'pendente' | 'parcial' | 'pago'; // Situação do pagamento ao técnico
+  technicianPaymentId?: string; // ID do comprovante de pagamento ao técnico
+  technicianPaymentReceiptNumber?: string; // Número do recibo de pagamento ao técnico
+  technicianPaymentDate?: string; // Data em que o pagamento foi realizado ao técnico
   createdAt: string;
   updatedAt: string;
   createdBy?: string;
+}
+
+export interface TechnicianPaymentItem {
+  serviceId: string;
+  orderNumber: string;
+  executionDate?: string;
+  clientName: string;
+  vehiclePlate: string;
+  vehicleModel?: string;
+  serviceCategory?: string;
+  technicianFee: number;
+  paidInThisPayment: number;
+  remainingAfterThisPayment: number;
+  statusAfterThisPayment: 'pago' | 'parcial';
 }
 
 export interface TechnicianPayment {
   id: string;
   technicianId: string;
   technicianName: string;
+  technicianCpf?: string;
+  technicianPhone?: string;
   serviceIds: string[]; // Serviços aos quais o pagamento está relacionado
   serviceOrderNumbers?: string[]; // Números das ordens de serviço
+  items?: TechnicianPaymentItem[]; // Detalhamento dos serviços quitados nesta operação
   amount: number; // Valor pago
   paymentDate: string; // YYYY-MM-DD
   paymentMethod: 'dinheiro' | 'pix' | string;
   receiptNumber?: string;
+  status?: 'confirmado' | 'cancelado';
+  cancelledAt?: string;
+  cancelledBy?: string;
+  cancellationReason?: string;
   notes?: string;
   createdAt: string;
   createdBy?: string;
@@ -358,6 +382,8 @@ export interface GeneralTransaction {
   description: string;
   entityName?: string;
   partyName: string; // Cliente ou Fornecedor
+  partyId?: string; // ID do Cliente ou Fornecedor
+  clientId?: string; // ID único do cliente para abertura direta da conta individual
   identifier: string; // Recibo, O.S. ou Comprovante
   category?: string;
   origin: TransactionOrigin;

@@ -194,7 +194,7 @@ service cloud.firestore {
       allow create: if isSignedIn() && isValidId(paymentId) &&
         incoming().technicianId is string &&
         incoming().amount is number && incoming().amount > 0;
-      allow update: if false; // Immutability of payment history
+      allow update: if (isAdmin() || isSignedIn()) && isValidId(paymentId);
       allow delete: if isAdmin();
     }
 

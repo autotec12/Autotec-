@@ -157,11 +157,15 @@ export const SecurityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         return;
       }
 
-      // Se for o mesmo usuário e já estiver desbloqueado (ex: renovação de token, reconexão de rede)
-      if (prevUidRef.current === user.uid && isUnlocked) {
+      // Se for o mesmo usuário autenticado e o status já foi inicializado:
+      // Não reative isCheckingPin nem trave a interface em renovações de token ou reconexão
+      if (prevUidRef.current === user.uid) {
         if (isMounted) {
           setIsCheckingPin(false);
-          setHasPinSetup(true);
+          if (isSessionUnlocked(user.uid)) {
+            setIsUnlocked(true);
+            setHasPinSetup(true);
+          }
         }
         return;
       }
@@ -175,10 +179,19 @@ export const SecurityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           setHasPinSetup(true);
           setIsCheckingPin(false);
         }
-      } else {
+        return;
+      }
+
+      // Se o usuário já possui PIN confirmado, não aciona a tela de inicialização
+      if (hasPinSetup === true) {
         if (isMounted) {
-          setIsCheckingPin(true);
+          setIsCheckingPin(false);
         }
+        return;
+      }
+
+      if (isMounted) {
+        setIsCheckingPin(true);
       }
 
       try {
@@ -247,7 +260,8 @@ export const SecurityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       clearSessionUnlocked(user.uid);
     }
     setIsUnlocked(false);
-  }, [user?.uid]);
+    setIsCheckingPin(false);
+  }, [user?.uid, clearSessionUnlocked]);
 
   // 3. MONITORAMENTO DE INATIVIDADE (5 MINUTOS) & VISIBILIDADE DE ABA
   useEffect(() => {

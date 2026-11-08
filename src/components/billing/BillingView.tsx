@@ -26,12 +26,31 @@ import {
   Plus,
   ShieldAlert,
   Trash2,
+  ArrowLeft,
+  UserCheck,
+  X,
+  Car,
 } from 'lucide-react';
 
-export const BillingView: React.FC = () => {
-  const { charges, payments, clients, vehicles, generateMonthlyCharges } = useData();
+interface BillingViewProps {
+  onNavigate?: (view: string) => void;
+}
 
-  const [selectedMonth, setSelectedMonth] = useState<string>(getCurrentMonthStr());
+export const BillingView: React.FC<BillingViewProps> = ({ onNavigate }) => {
+  const {
+    charges,
+    payments,
+    clients,
+    vehicles,
+    generateMonthlyCharges,
+    selectedBillingClientId,
+    setSelectedBillingClientId,
+  } = useData();
+
+  // If opening a specific client account, start by showing all historical months of this client
+  const [selectedMonth, setSelectedMonth] = useState<string>(() => {
+    return selectedBillingClientId ? '' : getCurrentMonthStr();
+  });
   const [statusFilter, setStatusFilter] = useState<'todos' | 'pendente' | 'parcial' | 'pago' | 'atrasado'>('todos');
   const [searchTerm, setSearchTerm] = useState('');
 
@@ -56,6 +75,27 @@ export const BillingView: React.FC = () => {
   const vehicleMap = new Map<string, Vehicle>();
   vehicles.forEach((v) => vehicleMap.set(v.id, v));
 
+  // Client-specific mode detection
+  const selectedClient = selectedBillingClientId
+    ? clientMap.get(selectedBillingClientId) || clients.find((c) => c.id === selectedBillingClientId) || null
+    : null;
+
+  const clientVehicles = selectedBillingClientId
+    ? vehicles.filter((v) => v.clientId === selectedBillingClientId)
+    : [];
+
+  const clientAllCharges = selectedBillingClientId
+    ? charges.filter((c) => c.clientId === selectedBillingClientId && c.status !== 'cancelado')
+    : [];
+
+  const clientTotalBilled = clientAllCharges.reduce((acc, c) => acc + (Number(c.totalAmount) || 0), 0);
+  const clientTotalPaid = clientAllCharges.reduce((acc, c) => acc + (Number(c.paidAmount) || 0), 0);
+  const clientTotalPending = clientAllCharges.reduce((acc, c) => acc + (Number(c.remainingBalance) || 0), 0);
+  const clientOverdueCount = clientAllCharges.filter((c) => c.remainingBalance > 0 && c.dueDate < today).length;
+  const clientPaidCount = clientAllCharges.filter((c) => c.status === 'pago').length;
+  const clientPartialCount = clientAllCharges.filter((c) => c.status === 'parcial').length;
+  const clientPendingCount = clientAllCharges.filter((c) => c.status === 'pendente' && c.dueDate >= today).length;
+
   // Monthly batch generator handler
   const handleGenerateMonthly = async () => {
     try {
@@ -73,24 +113,31 @@ export const BillingView: React.FC = () => {
     }
   };
 
-  // Filter charges
-  const filteredCharges = charges.filter((c) => {
-    const matchesMonth = !selectedMonth || c.referenceMonth === selectedMonth;
-    const matchesSearch =
-      c.clientName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      c.vehiclePlate.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      c.vehicleModel.toLowerCase().includes(searchTerm.toLowerCase());
+  // Filter charges (with individual client filtering support)
+  const filteredCharges = charges
+    .filter((c) => {
+      // If a specific client is selected, filter strictly by this client's unique ID
+      if (selectedBillingClientId && c.clientId !== selectedBillingClientId) {
+        return false;
+      }
 
-    const isOverdue = c.remainingBalance > 0 && c.dueDate < today;
+      const matchesMonth = !selectedMonth || selectedMonth === 'todos' || c.referenceMonth === selectedMonth;
+      const matchesSearch =
+        c.clientName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        c.vehiclePlate.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        c.vehicleModel.toLowerCase().includes(searchTerm.toLowerCase());
 
-    let matchesStatus = true;
-    if (statusFilter === 'pago') matchesStatus = c.status === 'pago';
-    else if (statusFilter === 'parcial') matchesStatus = c.status === 'parcial';
-    else if (statusFilter === 'pendente') matchesStatus = c.status === 'pendente' && !isOverdue;
-    else if (statusFilter === 'atrasado') matchesStatus = isOverdue;
+      const isOverdue = c.remainingBalance > 0 && c.dueDate < today;
 
-    return matchesMonth && matchesSearch && matchesStatus;
-  });
+      let matchesStatus = true;
+      if (statusFilter === 'pago') matchesStatus = c.status === 'pago';
+      else if (statusFilter === 'parcial') matchesStatus = c.status === 'parcial';
+      else if (statusFilter === 'pendente') matchesStatus = c.status === 'pendente' && !isOverdue;
+      else if (statusFilter === 'atrasado') matchesStatus = isOverdue;
+
+      return matchesMonth && matchesSearch && matchesStatus;
+    })
+    .sort((a, b) => (b.dueDate || '').localeCompare(a.dueDate || ''));
 
   // Calculate monthly summary indicators for selected month
   let monthlyEstimated = 0;
@@ -157,64 +204,155 @@ export const BillingView: React.FC = () => {
         </div>
       )}
 
-      {/* KPI Cards Strip for Selected Month */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-        <div className="p-4 bg-white border border-[#E2E4E0] rounded-xl shadow-xs">
-          <span className="text-2xs font-bold uppercase text-slate-500 block mb-1">
-            Previsão do Mês
-          </span>
-          <span className="text-lg font-black text-[#30334F] tracking-tight">
-            {formatCurrency(monthlyEstimated)}
-          </span>
-          <span className="text-2xs text-slate-400 block mt-0.5 font-medium">{selectedMonth}</span>
-        </div>
+      {/* CLIENT-SPECIFIC ACCOUNT HEADER (CORREÇÃO 1) */}
+      {selectedBillingClientId && selectedClient && (
+        <div className="bg-white border-2 border-[#30334F]/20 rounded-2xl p-5 shadow-xs space-y-4">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-[#30334F] text-white flex items-center justify-center shrink-0 shadow-xs">
+                <UserCheck className="w-5 h-5 text-[#F28C1B]" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="px-2.5 py-0.5 rounded-full text-2xs font-extrabold uppercase bg-blue-100 text-[#30334F] border border-blue-200">
+                    Conta Individual do Cliente
+                  </span>
+                  <span className="text-2xs font-mono text-slate-400">
+                    ID: {selectedClient.id}
+                  </span>
+                </div>
+                <h3 className="text-base font-black text-[#30334F] mt-0.5">
+                  {selectedClient.name}
+                </h3>
+                <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500 mt-1">
+                  {selectedClient.document && (
+                    <span><strong>CPF/CNPJ:</strong> {selectedClient.document}</span>
+                  )}
+                  {selectedClient.whatsapp && (
+                    <span><strong>WhatsApp:</strong> {selectedClient.whatsapp}</span>
+                  )}
+                  <span className="inline-flex items-center gap-1 font-semibold text-slate-600">
+                    <Car className="w-3.5 h-3.5 text-[#F28C1B]" />
+                    {clientVehicles.length} veículo(s) cadastrado(s)
+                  </span>
+                </div>
+              </div>
+            </div>
 
-        <div className="p-4 bg-white border border-[#E2E4E0] rounded-xl shadow-xs">
-          <span className="text-2xs font-bold uppercase text-emerald-700 block mb-1">
-            Total Recebido
-          </span>
-          <span className="text-lg font-black text-emerald-700 tracking-tight">
-            {formatCurrency(monthlyReceived)}
-          </span>
-          <span className="text-2xs text-slate-400 block mt-0.5 font-medium">Dinheiro em caixa</span>
-        </div>
+            <div className="flex items-center gap-2 flex-wrap self-start md:self-center">
+              {onNavigate && (
+                <button
+                  onClick={() => {
+                    setSelectedBillingClientId(null);
+                    onNavigate('general_management');
+                  }}
+                  className="px-3 py-1.5 bg-[#30334F] hover:bg-[#23253B] text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
+                  title="Retornar ao Extrato Geral Consolidado"
+                >
+                  <ArrowLeft className="w-3.5 h-3.5" />
+                  <span>Voltar ao Extrato</span>
+                </button>
+              )}
+              <button
+                onClick={() => setSelectedBillingClientId(null)}
+                className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+                title="Limpar o filtro do cliente e ver todos os clientes"
+              >
+                <X className="w-3.5 h-3.5" />
+                <span>Ver todos os clientes</span>
+              </button>
+            </div>
+          </div>
 
-        <div className="p-4 bg-white border border-[#E2E4E0] rounded-xl shadow-xs">
-          <span className="text-2xs font-bold uppercase text-[#F28C1B] block mb-1">
-            Saldo a Receber
-          </span>
-          <span className="text-lg font-black text-[#F28C1B] tracking-tight">
-            {formatCurrency(monthlyPending)}
-          </span>
-          <span className="text-2xs text-slate-400 block mt-0.5 font-medium">Em aberto</span>
-        </div>
+          {/* Client-specific KPI metrics */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
+              <span className="text-2xs font-bold uppercase text-slate-500 block">Total Cobrado</span>
+              <span className="text-base font-black text-[#30334F]">{formatCurrency(clientTotalBilled)}</span>
+              <span className="text-3xs text-slate-400 block">{clientAllCharges.length} fatura(s) no histórico</span>
+            </div>
 
-        <div className="p-4 bg-white border border-[#E2E4E0] rounded-xl shadow-xs">
-          <span className="text-2xs font-bold uppercase text-rose-700 block mb-1">
-            Total em Atraso
-          </span>
-          <span className="text-lg font-black text-rose-700 tracking-tight">
-            {formatCurrency(monthlyOverdue)}
-          </span>
-          <span className="text-2xs text-slate-400 block mt-0.5 font-medium">Vencidos do mês</span>
-        </div>
+            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl">
+              <span className="text-2xs font-bold uppercase text-emerald-700 block">Total Pago</span>
+              <span className="text-base font-black text-emerald-700">{formatCurrency(clientTotalPaid)}</span>
+              <span className="text-3xs text-emerald-600 block">{clientPaidCount} fatura(s) quitada(s)</span>
+            </div>
 
-        <div className="p-4 bg-white border border-[#E2E4E0] rounded-xl shadow-xs col-span-2 sm:col-span-1">
-          <span className="text-2xs font-bold uppercase text-amber-700 block mb-1">
-            Pagamentos Parciais
-          </span>
-          <span className="text-lg font-black text-amber-700 tracking-tight">
-            {monthlyPartialCount}
-          </span>
-          <span className="text-2xs text-slate-400 block mt-0.5 font-medium">Com saldo residual</span>
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl">
+              <span className="text-2xs font-bold uppercase text-amber-700 block">Saldo em Aberto</span>
+              <span className="text-base font-black text-amber-800">{formatCurrency(clientTotalPending)}</span>
+              <span className="text-3xs text-amber-700 block">{clientPartialCount} parcial • {clientPendingCount} a vencer</span>
+            </div>
+
+            <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl">
+              <span className="text-2xs font-bold uppercase text-rose-700 block">Faturas em Atraso</span>
+              <span className="text-base font-black text-rose-700">{clientOverdueCount}</span>
+              <span className="text-3xs text-rose-600 block">{clientOverdueCount > 0 ? 'Vencidas' : 'Em dia'}</span>
+            </div>
+          </div>
         </div>
-      </div>
+      )}
+
+      {/* KPI Cards Strip for Selected Month (When viewing all clients) */}
+      {!selectedBillingClientId && (
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+          <div className="p-4 bg-white border border-[#E2E4E0] rounded-xl shadow-xs">
+            <span className="text-2xs font-bold uppercase text-slate-500 block mb-1">
+              Previsão do Mês
+            </span>
+            <span className="text-lg font-black text-[#30334F] tracking-tight">
+              {formatCurrency(monthlyEstimated)}
+            </span>
+            <span className="text-2xs text-slate-400 block mt-0.5 font-medium">{selectedMonth || 'Todos'}</span>
+          </div>
+
+          <div className="p-4 bg-white border border-[#E2E4E0] rounded-xl shadow-xs">
+            <span className="text-2xs font-bold uppercase text-emerald-700 block mb-1">
+              Total Recebido
+            </span>
+            <span className="text-lg font-black text-emerald-700 tracking-tight">
+              {formatCurrency(monthlyReceived)}
+            </span>
+            <span className="text-2xs text-slate-400 block mt-0.5 font-medium">Dinheiro em caixa</span>
+          </div>
+
+          <div className="p-4 bg-white border border-[#E2E4E0] rounded-xl shadow-xs">
+            <span className="text-2xs font-bold uppercase text-[#F28C1B] block mb-1">
+              Saldo a Receber
+            </span>
+            <span className="text-lg font-black text-[#F28C1B] tracking-tight">
+              {formatCurrency(monthlyPending)}
+            </span>
+            <span className="text-2xs text-slate-400 block mt-0.5 font-medium">Em aberto</span>
+          </div>
+
+          <div className="p-4 bg-white border border-[#E2E4E0] rounded-xl shadow-xs">
+            <span className="text-2xs font-bold uppercase text-rose-700 block mb-1">
+              Total em Atraso
+            </span>
+            <span className="text-lg font-black text-rose-700 tracking-tight">
+              {formatCurrency(monthlyOverdue)}
+            </span>
+            <span className="text-2xs text-slate-400 block mt-0.5 font-medium">Vencidos do mês</span>
+          </div>
+
+          <div className="p-4 bg-white border border-[#E2E4E0] rounded-xl shadow-xs col-span-2 sm:col-span-1">
+            <span className="text-2xs font-bold uppercase text-amber-700 block mb-1">
+              Pagamentos Parciais
+            </span>
+            <span className="text-lg font-black text-amber-700 tracking-tight">
+              {monthlyPartialCount}
+            </span>
+            <span className="text-2xs text-slate-400 block mt-0.5 font-medium">Com saldo residual</span>
+          </div>
+        </div>
+      )}
 
       {/* Filter and Search Bar */}
       <div className="bg-white border border-[#E2E4E0] rounded-2xl p-4 shadow-xs flex flex-col md:flex-row gap-3 items-center justify-between">
         <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
-          {/* Month selector */}
-          <div className="flex items-center gap-1.5 text-xs text-slate-700">
+          {/* Month selector with All History option */}
+          <div className="flex items-center gap-1.5 text-xs text-slate-700 flex-wrap">
             <Calendar className="w-4 h-4 text-[#F28C1B]" />
             <span className="font-bold">Mês:</span>
             <input
@@ -223,6 +361,19 @@ export const BillingView: React.FC = () => {
               onChange={(e) => setSelectedMonth(e.target.value)}
               className="bg-[#F8F9FA] border border-[#DCE0D9] rounded-xl px-3 py-1.5 text-xs text-[#1E2235] focus:outline-hidden focus:border-[#30334F] font-bold"
             />
+            {selectedMonth ? (
+              <button
+                onClick={() => setSelectedMonth('')}
+                className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-2xs font-bold transition cursor-pointer"
+                title="Exibir faturas de todos os meses"
+              >
+                Ver Todo o Histórico
+              </button>
+            ) : (
+              <span className="px-2.5 py-1 bg-blue-50 text-[#30334F] border border-blue-200 rounded-lg text-2xs font-bold">
+                Todo o Histórico
+              </span>
+            )}
           </div>
 
           {/* Status filter */}
@@ -306,6 +457,30 @@ export const BillingView: React.FC = () => {
                             {charge.vehicleModel}
                           </span>
                         </div>
+                        {/* If in client mode, show reference month badge if not filtering by month */}
+                        {!selectedMonth && (
+                          <div className="mt-1">
+                            <span className="text-3xs font-mono font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200">
+                              Ref: {charge.referenceMonth}
+                            </span>
+                          </div>
+                        )}
+                        {/* Payments audit history for this charge */}
+                        {chargePayments.length > 0 && (
+                          <div className="mt-1.5 space-y-1">
+                            {chargePayments.map((p) => (
+                              <div
+                                key={p.id}
+                                className="inline-flex items-center gap-1.5 text-3xs text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200"
+                              >
+                                <span className="font-mono font-bold">{p.receiptNumber}</span>
+                                <span>• {formatDate(p.paymentDate)}</span>
+                                <span className="uppercase">• {p.paymentMethod}</span>
+                                <span className="font-bold">• {formatCurrency(p.amount)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </td>
 
                       {/* Due date */}
@@ -356,19 +531,36 @@ export const BillingView: React.FC = () => {
                         )}
                       </td>
 
-                      {/* Remaining balance */}
-                      <td className="px-4 py-3.5 font-black text-sm">
-                        {charge.remainingBalance > 0 ? (
-                          <span className={isOverdue ? 'text-rose-700' : 'text-[#F28C1B]'}>
-                            {formatCurrency(charge.remainingBalance)}
-                          </span>
+                      {/* Remaining balance (Melhoria visual dos valores pendentes) */}
+                      <td className="px-4 py-3.5">
+                        {charge.remainingBalance > 0.009 ? (
+                          <div className="space-y-1">
+                            <span
+                              className={`inline-flex items-center gap-1 text-2xs px-2.5 py-1 rounded-lg font-black shadow-2xs ${
+                                isOverdue
+                                  ? 'bg-rose-100 text-rose-900 border border-rose-300'
+                                  : 'bg-amber-100 text-amber-900 border border-amber-300'
+                              }`}
+                            >
+                              {isOverdue ? (
+                                <ShieldAlert className="w-3.5 h-3.5 text-rose-700 shrink-0" />
+                              ) : (
+                                <Clock className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+                              )}
+                              {formatCurrency(charge.remainingBalance)}
+                            </span>
+                            {charge.status === 'parcial' && (
+                              <div className="text-3xs text-amber-800 font-bold">
+                                {charge.balanceScheduledDate
+                                  ? `Acordo: ${formatDate(charge.balanceScheduledDate)}`
+                                  : `Pago: ${formatCurrency(charge.paidAmount)}`}
+                              </div>
+                            )}
+                          </div>
                         ) : (
-                          <span className="text-slate-400 font-normal">R$ 0,00</span>
-                        )}
-
-                        {charge.status === 'parcial' && charge.balanceScheduledDate && (
-                          <span className="block text-2xs font-bold text-amber-800 mt-0.5">
-                            Acordo: {formatDate(charge.balanceScheduledDate)}
+                          <span className="inline-flex items-center gap-1 text-2xs font-extrabold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
+                            <CheckCircle2 className="w-3 h-3 text-emerald-600 shrink-0" />
+                            R$ 0,00
                           </span>
                         )}
                       </td>

@@ -23,6 +23,12 @@ import {
   User,
   Users,
   Settings2,
+  Calendar,
+  Clock,
+  CheckCircle2,
+  FileText,
+  ShieldCheck,
+  Loader2,
 } from 'lucide-react';
 
 interface TechnicalServiceModalProps {
@@ -283,205 +289,268 @@ export const TechnicalServiceModal: React.FC<TechnicalServiceModalProps> = ({
 
   return (
     <>
-      <div className="fixed inset-0 z-50 overflow-y-auto bg-black/50 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
-        <div className="bg-white rounded-2xl shadow-xl max-w-3xl w-full border border-slate-200 overflow-hidden flex flex-col max-h-[92vh]">
-          {/* Header */}
-          <div className="bg-[#30334F] text-white px-5 py-4 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center text-[#F28C1B]">
+      <div className="fixed inset-0 z-50 overflow-y-auto bg-black/60 backdrop-blur-xs flex items-center justify-center p-2.5 sm:p-4">
+        <div className="bg-[#F8F9FA] rounded-2xl shadow-2xl max-w-4xl w-full border border-slate-200 overflow-hidden flex flex-col max-h-[94vh]">
+          {/* Header Institucional AUTOTEC */}
+          <div className="bg-[#30334F] text-white px-5 sm:px-6 py-4 flex items-center justify-between border-b border-white/10 shrink-0">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-10 h-10 rounded-xl bg-white/10 text-[#F28C1B] flex items-center justify-center shrink-0">
                 <Wrench className="w-5 h-5" />
               </div>
-              <div>
-                <h3 className="text-base font-bold text-white tracking-wide">
+              <div className="min-w-0">
+                <h3 className="text-base sm:text-lg font-black text-white tracking-tight truncate">
                   {orderToEdit ? 'Editar Ordem de Serviço Técnico' : 'Nova Ordem de Serviço Técnico'}
                 </h3>
-                <p className="text-xs text-slate-300">
-                  {orderToEdit ? `O.S. ${orderToEdit.orderNumber}` : 'Cadastro de serviços técnicos, múltiplos itens e técnico responsável'}
+                <p className="text-xs text-slate-300/90 mt-0.5 truncate">
+                  {orderToEdit
+                    ? `Ordem de Serviço Nº ${orderToEdit.orderNumber}`
+                    : 'Registro de serviços técnicos, múltiplos itens e controle de prestadores'}
                 </p>
               </div>
             </div>
             <button
+              type="button"
               onClick={onClose}
-              className="p-2 text-slate-300 hover:text-white hover:bg-white/10 rounded-xl transition cursor-pointer"
+              className="p-2 text-slate-300 hover:text-white hover:bg-white/10 rounded-xl transition cursor-pointer shrink-0 ml-2"
+              title="Fechar janela"
             >
               <X className="w-5 h-5" />
             </button>
           </div>
 
           {errorMsg && (
-            <div className="bg-red-50 text-red-800 px-4 py-3 text-xs flex items-center gap-2 border-b border-red-200">
-              <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
-              <span>{errorMsg}</span>
+            <div className="bg-rose-50 text-rose-800 px-5 py-3 text-xs flex items-center gap-2 border-b border-rose-200">
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+              <span className="font-semibold">{errorMsg}</span>
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-5 space-y-5">
-            {/* Cliente & Veículo vinculados */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-200">
-              {/* Cliente */}
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
-                  <User className="w-3.5 h-3.5 text-[#F28C1B]" />
-                  Cliente
-                </label>
-                <select
-                  value={clientId}
-                  onChange={(e) => handleClientChange(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-[#F28C1B] outline-hidden"
-                >
-                  <option value="">Selecione um cliente cadastrado ou digite abaixo</option>
-                  {clients.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name} ({c.whatsapp || c.phone || 'Sem fone'})
-                    </option>
-                  ))}
-                </select>
+          <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
+            {/* SEÇÃO A & B: DADOS DO CLIENTE E DADOS DO VEÍCULO */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {/* SEÇÃO A: DADOS DO CLIENTE */}
+              <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200/90 shadow-2xs space-y-3">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+                  <span className="text-xs font-black text-[#30334F] uppercase tracking-wide flex items-center gap-2">
+                    <User className="w-4 h-4 text-[#F28C1B]" />
+                    A. Dados do Cliente
+                  </span>
+                  <span className="text-3xs font-bold text-slate-400 uppercase">
+                    Identificação
+                  </span>
+                </div>
 
-                <div className="grid grid-cols-2 gap-2 pt-1">
-                  <input
-                    type="text"
-                    placeholder="Nome do cliente *"
-                    value={clientName}
-                    onChange={(e) => setClientName(e.target.value)}
-                    required
-                    className="px-3 py-1.5 bg-white border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-[#F28C1B] outline-hidden"
-                  />
-                  <input
-                    type="text"
-                    placeholder="WhatsApp / Telefone"
-                    value={clientPhone}
-                    onChange={(e) => setClientPhone(e.target.value)}
-                    className="px-3 py-1.5 bg-white border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-[#F28C1B] outline-hidden"
-                  />
+                <div className="space-y-2.5">
+                  <div>
+                    <label className="text-2xs font-bold text-slate-600 uppercase block mb-1">
+                      Cliente Cadastrado (Opcional)
+                    </label>
+                    <select
+                      value={clientId}
+                      onChange={(e) => handleClientChange(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:bg-white focus:border-[#F28C1B] focus:ring-2 focus:ring-[#F28C1B]/20 outline-hidden transition cursor-pointer"
+                    >
+                      <option value="">Selecione para preenchimento automático...</option>
+                      {clients.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name} {c.whatsapp || c.phone ? `• (${c.whatsapp || c.phone})` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <div>
+                      <label className="text-2xs font-bold text-slate-700 uppercase block mb-1">
+                        Nome Completo *
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Nome do cliente"
+                        value={clientName}
+                        onChange={(e) => setClientName(e.target.value)}
+                        required
+                        className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:bg-white focus:border-[#F28C1B] focus:ring-2 focus:ring-[#F28C1B]/20 outline-hidden transition"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-2xs font-bold text-slate-700 uppercase block mb-1">
+                        WhatsApp / Telefone
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="(DDD) 99999-9999"
+                        value={clientPhone}
+                        onChange={(e) => setClientPhone(e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:bg-white focus:border-[#F28C1B] focus:ring-2 focus:ring-[#F28C1B]/20 outline-hidden transition"
+                      />
+                    </div>
+                  </div>
                 </div>
               </div>
 
-              {/* Veículo */}
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
-                  <Car className="w-3.5 h-3.5 text-[#F28C1B]" />
-                  Veículo
-                </label>
-                <select
-                  value={vehicleId}
-                  onChange={(e) => handleVehicleChange(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-[#F28C1B] outline-hidden"
-                >
-                  <option value="">Selecione um veículo cadastrado ou digite abaixo</option>
-                  {vehicles.map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.plate} - {v.brand} {v.model} ({v.color || 'Cor não informada'})
-                    </option>
-                  ))}
-                </select>
+              {/* SEÇÃO B: DADOS DO VEÍCULO */}
+              <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200/90 shadow-2xs space-y-3">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+                  <span className="text-xs font-black text-[#30334F] uppercase tracking-wide flex items-center gap-2">
+                    <Car className="w-4 h-4 text-[#F28C1B]" />
+                    B. Dados do Veículo
+                  </span>
+                  <span className="text-3xs font-bold text-slate-400 uppercase">
+                    Veículo Atendido
+                  </span>
+                </div>
 
-                <div className="grid grid-cols-3 gap-2 pt-1">
-                  <input
-                    type="text"
-                    placeholder="Placa *"
-                    value={vehiclePlate}
-                    onChange={(e) => setVehiclePlate(e.target.value.toUpperCase())}
-                    required
-                    className="px-3 py-1.5 bg-white border border-slate-300 rounded-xl text-xs uppercase font-mono font-bold focus:ring-2 focus:ring-[#F28C1B] outline-hidden"
-                  />
-                  <input
-                    type="text"
-                    placeholder="Modelo (ex: Gol 1.6)"
-                    value={vehicleModel}
-                    onChange={(e) => setVehicleModel(e.target.value)}
-                    className="px-3 py-1.5 bg-white border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-[#F28C1B] outline-hidden"
-                  />
-                  <input
-                    type="text"
-                    placeholder="Cor (ex: Prata)"
-                    value={vehicleColor}
-                    onChange={(e) => setVehicleColor(e.target.value)}
-                    className="px-3 py-1.5 bg-white border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-[#F28C1B] outline-hidden"
-                  />
+                <div className="space-y-2.5">
+                  <div>
+                    <label className="text-2xs font-bold text-slate-600 uppercase block mb-1">
+                      Veículo Cadastrado (Opcional)
+                    </label>
+                    <select
+                      value={vehicleId}
+                      onChange={(e) => handleVehicleChange(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:bg-white focus:border-[#F28C1B] focus:ring-2 focus:ring-[#F28C1B]/20 outline-hidden transition cursor-pointer"
+                    >
+                      <option value="">Selecione para preenchimento automático...</option>
+                      {vehicles.map((v) => (
+                        <option key={v.id} value={v.id}>
+                          {v.plate} • {v.brand} {v.model} {v.color ? `(${v.color})` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    <div>
+                      <label className="text-2xs font-bold text-slate-700 uppercase block mb-1">
+                        Placa *
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="ABC1D23"
+                        value={vehiclePlate}
+                        onChange={(e) => setVehiclePlate(e.target.value.toUpperCase())}
+                        required
+                        className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-black text-[#30334F] uppercase focus:bg-white focus:border-[#F28C1B] focus:ring-2 focus:ring-[#F28C1B]/20 outline-hidden transition tracking-wider"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-2xs font-bold text-slate-700 uppercase block mb-1">
+                        Modelo
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Ex: Hilux, Gol..."
+                        value={vehicleModel}
+                        onChange={(e) => setVehicleModel(e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:bg-white focus:border-[#F28C1B] focus:ring-2 focus:ring-[#F28C1B]/20 outline-hidden transition"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-2xs font-bold text-slate-700 uppercase block mb-1">
+                        Cor
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Ex: Prata, Preto"
+                        value={vehicleColor}
+                        onChange={(e) => setVehicleColor(e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:bg-white focus:border-[#F28C1B] focus:ring-2 focus:ring-[#F28C1B]/20 outline-hidden transition"
+                      />
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
 
-            {/* Data & Técnico Responsável */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="text-xs font-bold text-slate-700 block mb-1">
-                  Data de Execução do Serviço
-                </label>
-                <input
-                  type="date"
-                  value={executionDate}
-                  onChange={(e) => setExecutionDate(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-[#F28C1B] outline-hidden"
-                />
+            {/* SEÇÃO C: DADOS DA EXECUÇÃO & TÉCNICO RESPONSÁVEL */}
+            <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200/90 shadow-2xs space-y-3.5">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+                <span className="text-xs font-black text-[#30334F] uppercase tracking-wide flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-[#F28C1B]" />
+                  C. Dados da Execução & Técnico Responsável
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowTechniciansModal(true)}
+                  className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-[#30334F] rounded-lg text-2xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+                  title="Abrir cadastro de técnicos prestadores"
+                >
+                  <Users className="w-3.5 h-3.5 text-[#F28C1B]" />
+                  Gerenciar Técnicos
+                </button>
               </div>
 
-              {/* Técnico Responsável */}
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
-                    <Users className="w-3.5 h-3.5 text-[#F28C1B]" />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-2xs font-bold text-slate-700 uppercase block mb-1">
+                    Data de Execução do Serviço *
+                  </label>
+                  <input
+                    type="date"
+                    value={executionDate}
+                    onChange={(e) => setExecutionDate(e.target.value)}
+                    required
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 focus:bg-white focus:border-[#F28C1B] focus:ring-2 focus:ring-[#F28C1B]/20 outline-hidden transition cursor-pointer"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-2xs font-bold text-slate-700 uppercase block mb-1">
                     Técnico Responsável
                   </label>
-                  <button
-                    type="button"
-                    onClick={() => setShowTechniciansModal(true)}
-                    className="text-2xs font-bold text-[#30334F] hover:text-[#F28C1B] transition underline cursor-pointer"
+                  <select
+                    value={isManualTechnician ? '__MANUAL__' : technicianId}
+                    onChange={(e) => handleTechnicianSelectChange(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 focus:bg-white focus:border-[#F28C1B] focus:ring-2 focus:ring-[#F28C1B]/20 outline-hidden transition cursor-pointer"
                   >
-                    Gerenciar Técnicos
-                  </button>
+                    <option value="">Selecione um técnico cadastrado...</option>
+                    {technicians.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name} {t.whatsapp ? `• ${t.whatsapp}` : ''} {t.status === 'inativo' ? '[Inativo]' : ''}
+                      </option>
+                    ))}
+                    <option value="__MANUAL__">Outro técnico (informar nome manualmente)...</option>
+                  </select>
+
+                  {(isManualTechnician || (!technicianId && !orderToEdit?.technicianId)) && (
+                    <input
+                      type="text"
+                      placeholder="Nome do técnico responsável"
+                      value={technicianName}
+                      onChange={(e) => setTechnicianName(e.target.value)}
+                      className="w-full px-3 py-2 bg-white border border-amber-300 rounded-xl text-xs font-medium text-slate-800 focus:border-[#F28C1B] focus:ring-2 focus:ring-[#F28C1B]/20 outline-hidden transition"
+                    />
+                  )}
+
+                  {technicianId && !isManualTechnician && (
+                    <div className="px-3 py-1.5 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center gap-1.5 text-2xs font-bold text-emerald-800">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      Técnico vinculado: {technicianName}
+                    </div>
+                  )}
                 </div>
-
-                {/* Seleção do técnico */}
-                <select
-                  value={isManualTechnician ? '__MANUAL__' : technicianId}
-                  onChange={(e) => handleTechnicianSelectChange(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-[#F28C1B] outline-hidden"
-                >
-                  <option value="">Selecione um técnico cadastrado...</option>
-                  {technicians.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name} {t.whatsapp ? `(${t.whatsapp})` : ''} {t.status === 'inativo' ? '[Inativo]' : ''}
-                    </option>
-                  ))}
-                  <option value="__MANUAL__">Informar outro técnico manualmente...</option>
-                </select>
-
-                {/* Campo de texto (para digitação manual ou confirmação do nome) */}
-                {(isManualTechnician || !technicianId) && (
-                  <input
-                    type="text"
-                    placeholder="Nome do técnico responsável (ex: Carlos Técnico AUTOTEC)"
-                    value={technicianName}
-                    onChange={(e) => setTechnicianName(e.target.value)}
-                    className="w-full px-3 py-1.5 bg-white border border-amber-300 rounded-xl text-xs focus:ring-2 focus:ring-[#F28C1B] outline-hidden"
-                  />
-                )}
-                {technicianId && !isManualTechnician && (
-                  <p className="text-2xs text-emerald-700 font-semibold flex items-center gap-1">
-                    Técnico vinculado: {technicianName}
-                  </p>
-                )}
               </div>
             </div>
 
-            {/* Itens do Serviço (Múltiplos itens na mesma O.S.) */}
-            <div className="space-y-3">
-              <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+            {/* SEÇÃO D: ITENS E SERVIÇOS EXECUTADOS */}
+            <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200/90 shadow-2xs space-y-3.5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 border-b border-slate-100 pb-3">
                 <div>
-                  <h4 className="text-xs font-bold text-[#30334F] uppercase tracking-wide">
-                    Itens e Serviços Executados
-                  </h4>
-                  <p className="text-2xs text-slate-500">
-                    Permite cadastrar múltiplos itens na mesma O.S. (instalação, manutenção, retirada, novos tipos)
+                  <span className="text-xs font-black text-[#30334F] uppercase tracking-wide flex items-center gap-2">
+                    <Wrench className="w-4 h-4 text-[#F28C1B]" />
+                    D. Itens & Serviços Executados
+                  </span>
+                  <p className="text-2xs text-slate-400 mt-0.5">
+                    Adicione múltiplos serviços na mesma O.S. (instalações, retiradas, manutenções, etc.)
                   </p>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 shrink-0">
                   <button
                     type="button"
                     onClick={() => setShowServiceTypesModal(true)}
-                    className="px-2.5 py-1.5 border border-slate-300 hover:bg-slate-100 text-slate-700 rounded-xl text-xs font-bold flex items-center gap-1 transition cursor-pointer"
-                    title="Cadastrar novos tipos de serviço"
+                    className="px-3 py-1.5 bg-white border border-slate-300 hover:border-[#30334F] text-slate-700 rounded-xl text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
+                    title="Configurar tipos e categorias de serviço"
                   >
                     <Settings2 className="w-3.5 h-3.5 text-[#30334F]" />
                     Tipos de Serviços
@@ -489,7 +558,7 @@ export const TechnicalServiceModal: React.FC<TechnicalServiceModalProps> = ({
                   <button
                     type="button"
                     onClick={handleAddItem}
-                    className="px-3 py-1.5 bg-[#F28C1B] hover:bg-[#DE7B0E] text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-2xs cursor-pointer"
+                    className="px-3.5 py-1.5 bg-[#F28C1B] hover:bg-[#DE7B0E] text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-2xs transition cursor-pointer"
                   >
                     <Plus className="w-3.5 h-3.5" />
                     Adicionar Serviço
@@ -497,56 +566,62 @@ export const TechnicalServiceModal: React.FC<TechnicalServiceModalProps> = ({
                 </div>
               </div>
 
-              <div className="space-y-2">
+              {/* Lista de Itens */}
+              <div className="space-y-2.5">
                 {items.map((item, index) => (
                   <div
                     key={item.id}
-                    className="flex flex-col sm:flex-row items-start sm:items-center gap-2 p-3 bg-slate-50 border border-slate-200 rounded-xl"
+                    className="p-3 bg-slate-50/80 border border-slate-200 rounded-xl flex flex-col md:flex-row items-stretch md:items-center gap-2.5 transition hover:border-slate-300"
                   >
-                    <span className="w-6 h-6 rounded-full bg-[#30334F] text-white text-xs font-bold flex items-center justify-center shrink-0">
-                      {index + 1}
-                    </span>
+                    {/* Badge do Índice */}
+                    <div className="flex items-center justify-between md:justify-start gap-2">
+                      <span className="w-6 h-6 rounded-lg bg-[#30334F] text-white text-2xs font-black flex items-center justify-center shrink-0">
+                        {index + 1}
+                      </span>
+                      {/* Categoria do serviço */}
+                      <select
+                        value={item.category}
+                        onChange={(e) => handleItemChange(index, 'category', e.target.value as TechnicalServiceCategory)}
+                        className="w-full sm:w-44 px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-800 focus:border-[#F28C1B] focus:ring-2 focus:ring-[#F28C1B]/20 outline-hidden shrink-0 cursor-pointer"
+                      >
+                        {availableCategories.map((cat) => (
+                          <option key={cat} value={cat}>
+                            {cat}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
 
-                    {/* Categoria */}
-                    <select
-                      value={item.category}
-                      onChange={(e) => handleItemChange(index, 'category', e.target.value as TechnicalServiceCategory)}
-                      className="w-full sm:w-44 px-2.5 py-1.5 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-700 focus:ring-2 focus:ring-[#F28C1B] outline-hidden shrink-0"
-                    >
-                      {availableCategories.map((cat) => (
-                        <option key={cat} value={cat}>
-                          {cat}
-                        </option>
-                      ))}
-                    </select>
+                    {/* Descrição detalhada */}
+                    <div className="flex-1 min-w-0">
+                      <input
+                        type="text"
+                        placeholder="Descrição do serviço executado *"
+                        value={item.description}
+                        onChange={(e) => handleItemChange(index, 'description', e.target.value)}
+                        required
+                        className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-medium text-slate-800 focus:border-[#F28C1B] focus:ring-2 focus:ring-[#F28C1B]/20 outline-hidden transition"
+                      />
+                    </div>
 
-                    {/* Descrição */}
-                    <input
-                      type="text"
-                      placeholder="Descrição detalhada do serviço realizado *"
-                      value={item.description}
-                      onChange={(e) => handleItemChange(index, 'description', e.target.value)}
-                      required
-                      className="flex-1 w-full px-3 py-1.5 bg-white border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-[#F28C1B] outline-hidden"
-                    />
-
-                    {/* Valor - Sem zero preso, apagável por completo e aceita centavos */}
-                    <div className="flex items-center gap-2 w-full sm:w-auto">
+                    {/* Valor e botão excluir */}
+                    <div className="flex items-center gap-2 justify-end shrink-0">
                       <div className="relative w-32 shrink-0">
-                        <span className="absolute left-2.5 top-1.5 text-xs font-bold text-slate-400">R$</span>
+                        <span className="absolute left-2.5 top-2 text-2xs font-bold text-slate-400">R$</span>
                         <CurrencyInput
                           value={item.value}
                           onChange={(val) => handleItemChange(index, 'value', val)}
                           placeholder="0,00"
-                          className="w-full pl-8 pr-2.5 py-1.5 bg-white border border-slate-300 rounded-xl text-xs font-bold text-right focus:ring-2 focus:ring-[#F28C1B] outline-hidden"
+                          className="w-full pl-8 pr-2.5 py-2 bg-white border border-slate-300 rounded-xl text-xs font-black text-right text-slate-900 focus:border-[#F28C1B] focus:ring-2 focus:ring-[#F28C1B]/20 outline-hidden"
                         />
                       </div>
 
                       <button
                         type="button"
                         onClick={() => handleRemoveItem(index)}
-                        className="p-1.5 text-slate-400 hover:text-red-500 rounded-lg hover:bg-white transition cursor-pointer"
-                        title="Remover item"
+                        disabled={items.length <= 1}
+                        className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
+                        title="Remover este item"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -556,57 +631,65 @@ export const TechnicalServiceModal: React.FC<TechnicalServiceModalProps> = ({
               </div>
             </div>
 
-            {/* Fechamento Financeiro */}
-            <div className="bg-[#30334F]/5 border border-[#30334F]/15 rounded-xl p-4 space-y-4">
-              <h4 className="text-xs font-bold text-[#30334F] uppercase tracking-wide flex items-center gap-1.5">
-                <DollarSign className="w-4 h-4 text-[#F28C1B]" />
-                Fechamento Financeiro & Pagamento
-              </h4>
+            {/* SEÇÃO E: FECHAMENTO FINANCEIRO DA O.S. */}
+            <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200/90 shadow-2xs space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+                <span className="text-xs font-black text-[#30334F] uppercase tracking-wide flex items-center gap-2">
+                  <DollarSign className="w-4 h-4 text-[#F28C1B]" />
+                  E. Fechamento Financeiro da O.S. (Cobrança do Cliente)
+                </span>
+                <span className="text-3xs font-bold text-slate-400 uppercase">
+                  Valores & Pagamento
+                </span>
+              </div>
 
+              {/* Linha 1: Subtotal, Desconto e Total da O.S. */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
-                  <label className="text-xs font-bold text-slate-600 block mb-1">
-                    Subtotal dos Itens
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                  <label className="text-2xs font-bold text-slate-500 uppercase block mb-1">
+                    Subtotal dos Serviços
                   </label>
-                  <div className="px-3 py-2 bg-white border border-slate-200 rounded-xl text-sm font-bold text-slate-800">
+                  <div className="text-base font-black text-slate-800">
                     {formatCurrency(subtotal)}
                   </div>
                 </div>
 
-                <div>
-                  <label className="text-xs font-bold text-slate-600 block mb-1">
-                    Desconto no Total (R$)
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                  <label className="text-2xs font-bold text-slate-500 uppercase block mb-1">
+                    Desconto Concedido
                   </label>
                   <div className="relative">
-                    <span className="absolute left-2.5 top-2 text-xs font-bold text-slate-400">R$</span>
+                    <span className="absolute left-2.5 top-1.5 text-2xs font-bold text-slate-400">R$</span>
                     <CurrencyInput
                       value={discount}
                       onChange={(val) => setDiscount(val)}
                       placeholder="0,00"
-                      className="w-full pl-8 pr-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold text-right text-red-600 focus:ring-2 focus:ring-[#F28C1B] outline-hidden"
+                      className="w-full pl-8 pr-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-black text-right text-rose-600 focus:border-[#F28C1B] focus:ring-2 focus:ring-[#F28C1B]/20 outline-hidden"
                     />
                   </div>
                 </div>
 
-                <div>
-                  <label className="text-xs font-bold text-[#30334F] block mb-1">
+                {/* Total da O.S. em destaque visual */}
+                <div className="p-3 bg-[#30334F] rounded-xl text-white shadow-xs flex flex-col justify-between">
+                  <label className="text-2xs font-black uppercase text-white/80 block">
                     Valor Total da O.S.
                   </label>
-                  <div className="px-3 py-2 bg-[#30334F] text-white rounded-xl text-sm font-black text-right shadow-2xs">
+                  <div className="text-xl font-black text-white text-right tracking-tight mt-1">
                     {formatCurrency(totalAmount)}
                   </div>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-[#30334F]/10">
+              {/* Linha 2: Forma de Pagamento, Valor Pago e Saldo Restante */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-slate-100">
                 <div>
-                  <label className="text-xs font-bold text-slate-700 block mb-1">
+                  <label className="text-2xs font-bold text-slate-700 uppercase block mb-1">
                     Forma de Pagamento
                   </label>
                   <select
                     value={paymentMethod}
                     onChange={(e) => setPaymentMethod(e.target.value as 'dinheiro' | 'pix')}
-                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-800 focus:ring-2 focus:ring-[#F28C1B] outline-hidden"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:border-[#F28C1B] focus:ring-2 focus:ring-[#F28C1B]/20 outline-hidden transition cursor-pointer"
                   >
                     <option value="pix">PIX Instantâneo</option>
                     <option value="dinheiro">Dinheiro em Espécie</option>
@@ -614,101 +697,101 @@ export const TechnicalServiceModal: React.FC<TechnicalServiceModalProps> = ({
                 </div>
 
                 <div>
-                  <label className="text-xs font-bold text-emerald-700 block mb-1">
-                    Valor Pago (R$)
+                  <label className="text-2xs font-bold text-emerald-800 uppercase block mb-1">
+                    Valor Pago pelo Cliente (R$)
                   </label>
                   <div className="relative">
-                    <span className="absolute left-2.5 top-2 text-xs font-bold text-emerald-600">R$</span>
+                    <span className="absolute left-2.5 top-2 text-2xs font-bold text-emerald-600">R$</span>
                     <CurrencyInput
                       value={paidAmount}
                       onChange={(val) => setPaidAmount(val)}
                       placeholder="0,00"
-                      className="w-full pl-8 pr-3 py-2 bg-white border border-emerald-300 rounded-xl text-xs font-bold text-right text-emerald-800 focus:ring-2 focus:ring-emerald-500 outline-hidden"
+                      className="w-full pl-8 pr-3 py-2 bg-white border border-emerald-300 rounded-xl text-xs font-black text-right text-emerald-800 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 outline-hidden"
                     />
                   </div>
                 </div>
 
                 <div>
-                  <label className="text-xs font-bold text-slate-600 block mb-1">
-                    Saldo Restante / Status
+                  <label className="text-2xs font-bold text-slate-700 uppercase block mb-1">
+                    Saldo Restante & Situação
                   </label>
-                  <div className="px-3 py-2 bg-white border border-slate-200 rounded-xl flex items-center justify-between text-xs font-bold">
-                    <span className={remainingBalance > 0 ? 'text-amber-700' : 'text-slate-500'}>
-                      {formatCurrency(remainingBalance)}
+                  <div className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between">
+                    <span className={`text-xs font-black ${remainingBalance > 0 ? 'text-amber-800' : 'text-emerald-700'}`}>
+                      {remainingBalance > 0 ? formatCurrency(remainingBalance) : 'R$ 0,00'}
                     </span>
                     <span
-                      className={`px-2 py-0.5 rounded-full text-2xs uppercase font-extrabold ${
+                      className={`px-2 py-0.5 rounded-full text-3xs uppercase font-black border ${
                         status === 'pago'
-                          ? 'bg-emerald-100 text-emerald-800'
+                          ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
                           : status === 'parcial'
-                          ? 'bg-amber-100 text-amber-800'
-                          : 'bg-red-100 text-red-800'
+                          ? 'bg-amber-100 text-amber-800 border-amber-200'
+                          : 'bg-rose-100 text-rose-800 border-rose-200'
                       }`}
                     >
-                      {status}
+                      {status === 'pago' ? 'Quitado' : status === 'parcial' ? 'Parcial' : 'Pendente'}
                     </span>
                   </div>
                 </div>
               </div>
             </div>
 
-            {/* Controle de Pagamento ao Técnico Prestador (Obrigação da Empresa) */}
-            <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-4 space-y-3">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
-                <h4 className="text-xs font-bold text-amber-950 uppercase tracking-wide flex items-center gap-1.5">
-                  <Users className="w-4 h-4 text-[#F28C1B]" />
-                  Pagamento ao Técnico Prestador (Obrigação da Empresa)
-                </h4>
-                <span className="text-2xs text-amber-800 bg-amber-100 px-2 py-0.5 rounded-full font-bold w-fit">
-                  Independente da Cobrança do Cliente
+            {/* SEÇÃO F: PAGAMENTO AO TÉCNICO PRESTADOR (OBRIGAÇÃO DA EMPRESA) */}
+            <div className="bg-amber-50/50 p-4 sm:p-5 rounded-2xl border border-amber-200 shadow-2xs space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 border-b border-amber-200/60 pb-2">
+                <span className="text-xs font-black text-amber-950 uppercase tracking-wide flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4 text-[#F28C1B]" />
+                  F. Pagamento ao Técnico Prestador (Obrigação da Empresa)
+                </span>
+                <span className="text-3xs font-extrabold text-amber-900 bg-amber-100/90 border border-amber-200 px-2 py-0.5 rounded-full uppercase tracking-wider w-fit">
+                  Independente do Faturamento do Cliente
                 </span>
               </div>
-              <p className="text-2xs text-amber-700 leading-relaxed">
-                Informe o valor devido ao técnico pelo serviço realizado. Este valor não altera o faturamento nem o valor cobrado do cliente.
+              <p className="text-2xs text-amber-900/80 leading-relaxed font-medium">
+                Informe o valor devido pela empresa ao técnico prestador por este serviço. Este registro compõe as despesas operacionais da empresa e <strong>não altera</strong> o valor cobrado do cliente.
               </p>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
                 <div>
-                  <label className="text-xs font-bold text-slate-700 block mb-1">
+                  <label className="text-2xs font-bold text-amber-950 uppercase block mb-1">
                     Valor Devido ao Técnico (R$)
                   </label>
                   <div className="relative">
-                    <span className="absolute left-2.5 top-2 text-xs font-bold text-slate-400">R$</span>
+                    <span className="absolute left-2.5 top-2 text-2xs font-bold text-amber-700">R$</span>
                     <CurrencyInput
                       value={technicianFee ?? 0}
                       onChange={(val) => setTechnicianFee(val)}
                       placeholder="0,00"
-                      className="w-full pl-8 pr-3 py-2 bg-white border border-amber-300 rounded-xl text-xs font-bold text-right text-amber-900 focus:ring-2 focus:ring-[#F28C1B] outline-hidden"
+                      className="w-full pl-8 pr-3 py-2 bg-white border border-amber-300 rounded-xl text-xs font-black text-right text-amber-950 focus:border-[#F28C1B] focus:ring-2 focus:ring-[#F28C1B]/20 outline-hidden"
                     />
                   </div>
                 </div>
 
                 {orderToEdit && orderToEdit.technicianFee !== undefined && (
                   <>
-                    <div>
-                      <label className="text-xs font-bold text-slate-600 block mb-1">
+                    <div className="p-3 bg-white/90 rounded-xl border border-amber-200 flex flex-col justify-between">
+                      <label className="text-3xs font-bold text-slate-500 uppercase block">
                         Valor Já Pago ao Técnico
                       </label>
-                      <div className="px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-emerald-700">
+                      <div className="text-sm font-black text-emerald-700 mt-1">
                         {formatCurrency(orderToEdit.technicianPaidAmount || 0)}
                       </div>
                     </div>
 
-                    <div>
-                      <label className="text-xs font-bold text-slate-600 block mb-1">
+                    <div className="p-3 bg-white/90 rounded-xl border border-amber-200 flex flex-col justify-between">
+                      <label className="text-3xs font-bold text-slate-500 uppercase block">
                         Saldo Pendente ao Técnico
                       </label>
-                      <div className="px-3 py-2 bg-white border border-slate-200 rounded-xl flex items-center justify-between text-xs font-bold">
-                        <span className={(orderToEdit.technicianRemainingBalance || 0) > 0 ? 'text-amber-800' : 'text-slate-500'}>
+                      <div className="flex items-center justify-between mt-1">
+                        <span className="text-sm font-black text-amber-900">
                           {formatCurrency(orderToEdit.technicianRemainingBalance || 0)}
                         </span>
                         <span
-                          className={`px-2 py-0.5 rounded-full text-2xs uppercase font-extrabold ${
+                          className={`px-2 py-0.5 rounded-full text-3xs font-black uppercase ${
                             orderToEdit.technicianPaymentStatus === 'pago'
                               ? 'bg-emerald-100 text-emerald-800'
                               : orderToEdit.technicianPaymentStatus === 'parcial'
                               ? 'bg-amber-100 text-amber-800'
-                              : 'bg-slate-100 text-slate-800'
+                              : 'bg-rose-100 text-rose-800'
                           }`}
                         >
                           {orderToEdit.technicianPaymentStatus || 'pendente'}
@@ -720,44 +803,54 @@ export const TechnicalServiceModal: React.FC<TechnicalServiceModalProps> = ({
               </div>
             </div>
 
-            {/* Observações */}
-            <div>
-              <label className="text-xs font-bold text-slate-700 block mb-1">
-                Observações Adicionais (opcional)
-              </label>
+            {/* SEÇÃO G: OBSERVAÇÕES ADICIONAIS */}
+            <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200/90 shadow-2xs space-y-2">
+              <span className="text-xs font-black text-[#30334F] uppercase tracking-wide flex items-center gap-2">
+                <FileText className="w-4 h-4 text-[#F28C1B]" />
+                G. Observações Adicionais (Opcional)
+              </span>
               <textarea
                 rows={2}
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
-                placeholder="Anotações de campo, detalhes da fiação ou garantia..."
-                className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-[#F28C1B] outline-hidden"
+                placeholder="Anotações de campo, detalhes da fiação, numeração de rastreador ou observações gerais..."
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:bg-white focus:border-[#F28C1B] focus:ring-2 focus:ring-[#F28C1B]/20 outline-hidden transition"
               />
             </div>
 
-            {/* Actions */}
-            <div className="pt-4 border-t border-slate-200 flex items-center justify-end gap-3">
+            {/* AÇÕES DE RODAPÉ PADRONIZADAS */}
+            <div className="pt-3 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-end gap-2.5">
               <button
                 type="button"
                 onClick={onClose}
                 disabled={saving}
-                className="px-4 py-2 border border-slate-300 text-slate-700 hover:bg-slate-50 rounded-xl text-xs font-bold transition cursor-pointer"
+                className="w-full sm:w-auto px-4 py-2.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-bold transition cursor-pointer disabled:opacity-50"
               >
                 Cancelar
               </button>
               <button
                 type="submit"
                 disabled={saving}
-                className="px-5 py-2 bg-[#F28C1B] hover:bg-[#DE7B0E] text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition cursor-pointer"
+                className="w-full sm:w-auto px-6 py-2.5 bg-[#F28C1B] hover:bg-[#DE7B0E] text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-xs transition cursor-pointer disabled:opacity-50"
               >
-                <Save className="w-4 h-4" />
-                {saving ? 'Salvando O.S....' : orderToEdit ? 'Atualizar O.S.' : 'Criar Ordem de Serviço'}
+                {saving ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Salvando O.S....
+                  </>
+                ) : (
+                  <>
+                    <Save className="w-4 h-4" />
+                    {orderToEdit ? 'Atualizar Ordem de Serviço' : 'Criar Ordem de Serviço'}
+                  </>
+                )}
               </button>
             </div>
           </form>
         </div>
       </div>
 
-      {/* Sub-modals for technicians and service types */}
+      {/* Sub-modais de Gestão Integrada */}
       {showTechniciansModal && (
         <TechniciansModal
           onClose={() => setShowTechniciansModal(false)}
@@ -768,7 +861,6 @@ export const TechnicalServiceModal: React.FC<TechnicalServiceModalProps> = ({
         <ServiceTypesModal
           onClose={() => setShowServiceTypesModal(false)}
           onSelectType={(typeName) => {
-            // Pre-select this category in the last item or add item
             if (items.length > 0) {
               handleItemChange(items.length - 1, 'category', typeName);
             }

@@ -65,7 +65,16 @@ function MainApp() {
     }
   };
 
-  if (authLoading || (user && isCheckingPin)) {
+  // Guard initial cold boot: the "Iniciando AUTOTEC" screen is only shown on initial cold start
+  const [hasInitiallyBooted, setHasInitiallyBooted] = useState(false);
+
+  React.useEffect(() => {
+    if (!authLoading && !isCheckingPin) {
+      setHasInitiallyBooted(true);
+    }
+  }, [authLoading, isCheckingPin]);
+
+  if (!hasInitiallyBooted && (authLoading || (user && isCheckingPin))) {
     return (
       <div className="min-h-screen bg-[#F3F4F2] flex flex-col items-center justify-center p-4">
         <div className="w-16 h-16 rounded-2xl bg-white border border-[#E2E4E0] shadow-md flex items-center justify-center text-[#30334F] mb-4">
@@ -114,7 +123,7 @@ function MainApp() {
         {currentView === 'clients' && <ClientsView />}
         {currentView === 'vehicles' && <VehiclesView />}
         {currentView === 'plans' && <PlansView />}
-        {currentView === 'billing' && <BillingView />}
+        {currentView === 'billing' && <BillingView onNavigate={handleNavigate} />}
         {currentView === 'services' && <TechnicalServicesView />}
         {currentView === 'expenses' && <CompanyExpensesView />}
         {currentView === 'receipts' && <ReceiptsListView />}

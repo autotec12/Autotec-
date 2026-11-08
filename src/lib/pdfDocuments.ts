@@ -1629,3 +1629,213 @@ export function generateTechnicianDossierPdf(
   drawFooter(doc, company);
   return doc.output('blob');
 }
+
+/**
+ * Generates an official A4 PDF Receipt for a Technician Payment (Quitação de Serviços).
+ */
+export function generateTechnicianPaymentReceiptPdf(
+  payment: import('../types').TechnicianPayment,
+  technician?: import('../types').Technician,
+  services?: import('../types').TechnicalServiceOrder[],
+  company?: import('../types').CompanySettings
+): Blob {
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'a4',
+  });
+
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const effectiveCompany = company || ({} as import('../types').CompanySettings);
+
+  const receiptNum = payment.receiptNumber || `REC-TEC-${payment.id.slice(-6)}`;
+  const payDate = formatDate(payment.paymentDate || payment.createdAt);
+  const techName = payment.technicianName || technician?.name || 'Técnico Prestador';
+  const techCpf = payment.technicianCpf || technician?.cpf || 'Não informado';
+  const techPhone = payment.technicianPhone || technician?.whatsapp || technician?.phone || 'Não informado';
+
+  let startY = drawHeader(
+    doc,
+    'RECIBO DE QUITAÇÃO DE PRESTAÇÃO DE SERVIÇOS',
+    effectiveCompany,
+    `Comprovante: ${receiptNum} • Emissão: ${payDate}`
+  );
+
+  // Prestador & Pagamento Info Box
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(226, 232, 240);
+  doc.roundedRect(14, startY, pageWidth - 28, 28, 3, 3, 'FD');
+
+  // Left column: Prestador
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.setTextColor(COLOR_NAVY[0], COLOR_NAVY[1], COLOR_NAVY[2]);
+  doc.text('PRESTADOR DE SERVIÇOS:', 18, startY + 6);
+  doc.setFontSize(10);
+  doc.setTextColor(30, 41, 59);
+  doc.text(techName, 18, startY + 12);
+  doc.setFontSize(8);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(71, 85, 105);
+  doc.text(`CPF: ${techCpf}  •  Telefone/WhatsApp: ${techPhone}`, 18, startY + 18);
+  if (technician?.address) {
+    doc.text(`Endereço: ${technician.address}`, 18, startY + 23);
+  }
+
+  // Right column: Dados Quitação
+  const midX = pageWidth / 2 + 10;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.setTextColor(COLOR_NAVY[0], COLOR_NAVY[1], COLOR_NAVY[2]);
+  doc.text('DADOS DA QUITAÇÃO:', midX, startY + 6);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.setTextColor(71, 85, 105);
+  doc.text(`Data do Pagamento: ${payDate}`, midX, startY + 12);
+  doc.text(`Forma: ${(payment.paymentMethod || 'PIX').replace('_', ' ').toUpperCase()}`, midX, startY + 17);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(22, 101, 52);
+  doc.text(`Status: ${(payment.status || 'CONFIRMADO').toUpperCase()}`, midX, startY + 22);
+
+  startY += 34;
+
+  // Items table
+  const items = payment.items && payment.items.length > 0
+    ? payment.items
+    : (services || []).map((s) => ({
+        serviceId: s.id,
+        orderNumber: s.orderNumber,
+        executionDate: s.executionDate || s.createdAt,
+        clientName: s.clientName,
+        vehiclePlate: s.vehiclePlate,
+        vehicleModel: s.vehicleModel,
+        serviceCategory: s.items?.map((i) => i.category).join(', ') || 'Serviço',
+        technicianFee: Number(s.technicianFee || 0),
+        paidInThisPayment: Number(s.technicianPaidAmount || s.technicianFee || 0),
+        remainingAfterThisPayment: Number(s.technicianRemainingBalance || 0),
+        statusAfterThisPayment: (s.technicianRemainingBalance || 0) <= 0.009 ? 'pago' as const : 'parcial' as const,
+      }));
+
+  const itemRows = items.map((item) => [
+    item.orderNumber,
+    formatDate(item.executionDate || ''),
+    `${item.clientName}\nPlaca: ${item.vehiclePlate} (${item.vehicleModel || '-'})`,
+    item.serviceCategory || 'Serviço Técnico',
+    formatCurrency(item.technicianFee),
+    formatCurrency(item.paidInThisPayment),
+    item.statusAfterThisPayment === 'pago' ? 'QUITADO' : 'PARCIAL',
+  ]);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.setTextColor(COLOR_NAVY[0], COLOR_NAVY[1], COLOR_NAVY[2]);
+  doc.text('SERVIÇOS TÉCNICOS INCLUÍDOS NESTA QUITAÇÃO:', 14, startY - 1);
+
+  autoTable(doc, {
+    startY,
+    head: [['O.S.', 'DATA EXEC.', 'CLIENTE / VEÍCULO', 'TIPO DE SERVIÇO', 'VALOR DEVIDO', 'PAGO NESTA BAIXA', 'SITUAÇÃO']],
+    body: itemRows.length > 0 ? itemRows : [['Nenhum serviço discriminado', '', '', '', '', '', '']],
+    theme: 'grid',
+    headStyles: {
+      fillColor: [48, 51, 79],
+      textColor: [255, 255, 255],
+      fontStyle: 'bold',
+      fontSize: 7.5,
+    },
+    bodyStyles: {
+      fontSize: 7,
+      textColor: [30, 41, 59],
+    },
+    columnStyles: {
+      0: { fontStyle: 'bold', halign: 'center' },
+      1: { halign: 'center' },
+      4: { halign: 'right' },
+      5: { halign: 'right', fontStyle: 'bold', textColor: [22, 101, 52] },
+      6: { halign: 'center', fontStyle: 'bold' },
+    },
+    foot: [
+      ['TOTAL:', `${items.length} serviço(s)`, '', '', '', formatCurrency(payment.amount), 'PAGO'],
+    ],
+    footStyles: {
+      fillColor: [243, 244, 242],
+      textColor: [48, 51, 79],
+      fontStyle: 'bold',
+      fontSize: 8,
+    },
+  });
+
+  startY = (doc as any).lastAutoTable.finalY + 8;
+
+  // Total Card
+  doc.setFillColor(48, 51, 79);
+  doc.roundedRect(14, startY, pageWidth - 28, 16, 2, 2, 'F');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.setTextColor(242, 140, 27);
+  doc.text('VALOR TOTAL PAGO AO PRESTADOR:', 18, startY + 6);
+  doc.setFontSize(13);
+  doc.setTextColor(255, 255, 255);
+  doc.text(formatCurrency(payment.amount), 18, startY + 12.5);
+
+  doc.setFontSize(8);
+  doc.setTextColor(203, 213, 225);
+  doc.text(`${items.length} serviço(s) baixado(s) integral/parcialmente`, pageWidth - 20, startY + 10, { align: 'right' });
+
+  startY += 22;
+
+  // Legal declaration box
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(226, 232, 240);
+  doc.roundedRect(14, startY, pageWidth - 28, 16, 2, 2, 'FD');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7);
+  doc.setTextColor(COLOR_NAVY[0], COLOR_NAVY[1], COLOR_NAVY[2]);
+  doc.text('DECLARAÇÃO DE QUITAÇÃO DE VALORES:', 18, startY + 5);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(6.5);
+  doc.setTextColor(71, 85, 105);
+  doc.text(
+    `Declaramos que o prestador ${techName} recebeu a quantia de ${formatCurrency(payment.amount)} referente aos serviços técnicos discriminados acima,`,
+    18,
+    startY + 9
+  );
+  doc.text(
+    'dando a empresa AUTOTEC Rastreamento Veicular plena, geral e irrevogável quitação das quantias pagas.',
+    18,
+    startY + 13
+  );
+
+  startY += 26;
+
+  // Signatures
+  const lineY = startY + 14;
+  doc.setDrawColor(148, 163, 184);
+  doc.setLineWidth(0.3);
+
+  // Prestador signature
+  doc.line(24, lineY, 95, lineY);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.5);
+  doc.setTextColor(30, 41, 59);
+  doc.text(techName, 59.5, lineY + 4, { align: 'center' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(6.5);
+  doc.setTextColor(100, 116, 139);
+  doc.text(`Assinatura do Prestador (CPF: ${techCpf})`, 59.5, lineY + 8, { align: 'center' });
+
+  // AUTOTEC signature
+  doc.line(pageWidth - 95, lineY, pageWidth - 24, lineY);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.5);
+  doc.setTextColor(30, 41, 59);
+  doc.text(effectiveCompany.companyName || 'AUTOTEC Rastreamento Veicular', pageWidth - 59.5, lineY + 4, { align: 'center' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(6.5);
+  doc.setTextColor(100, 116, 139);
+  doc.text('Administração / Financeiro', pageWidth - 59.5, lineY + 8, { align: 'center' });
+
+  drawFooter(doc, effectiveCompany);
+  return doc.output('blob');
+}
+

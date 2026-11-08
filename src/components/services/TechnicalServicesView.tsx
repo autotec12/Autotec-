@@ -6,6 +6,9 @@ import { TechnicalServiceModal } from './TechnicalServiceModal';
 import { TechnicalServiceReceiptModal } from './TechnicalServiceReceiptModal';
 import { TechniciansModal } from './TechniciansModal';
 import { ServiceTypesModal } from './ServiceTypesModal';
+import { TechnicianPaymentModal } from '../technicians/TechnicianPaymentModal';
+import { TechnicianReceiptModal } from '../technicians/TechnicianReceiptModal';
+import { Technician, TechnicianPayment } from '../../types';
 import {
   Wrench,
   Plus,
@@ -26,13 +29,24 @@ import {
 } from 'lucide-react';
 
 export const TechnicalServicesView: React.FC = () => {
-  const { technicalServices, deleteTechnicalService, selectedDetailItem, setSelectedDetailItem } = useData();
+  const {
+    technicalServices,
+    technicians,
+    technicianPayments,
+    deleteTechnicalService,
+    selectedDetailItem,
+    setSelectedDetailItem,
+  } = useData();
 
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'pago' | 'parcial' | 'pendente'>('all');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [showTechniciansModal, setShowTechniciansModal] = useState(false);
   const [showServiceTypesModal, setShowServiceTypesModal] = useState(false);
+  const [showTechnicianPaymentModal, setShowTechnicianPaymentModal] = useState(false);
+  const [preselectedTechForPayment, setPreselectedTechForPayment] = useState<Technician | null>(null);
+  const [preselectedServiceIdsForPayment, setPreselectedServiceIdsForPayment] = useState<string[]>([]);
+  const [viewingTechnicianReceipt, setViewingTechnicianReceipt] = useState<TechnicianPayment | null>(null);
   const [orderToEdit, setOrderToEdit] = useState<TechnicalServiceOrder | null>(null);
   const [viewingReceiptOrder, setViewingReceiptOrder] = useState<TechnicalServiceOrder | null>(() => {
     if (selectedDetailItem && selectedDetailItem.type === 'servico_tecnico') {
@@ -62,6 +76,16 @@ export const TechnicalServicesView: React.FC = () => {
   const totalBilled = technicalServices.reduce((acc, o) => acc + (o.totalAmount || 0), 0);
   const totalPaid = technicalServices.reduce((acc, o) => acc + (o.paidAmount || 0), 0);
   const totalRemaining = technicalServices.reduce((acc, o) => acc + (o.remainingBalance || 0), 0);
+  const totalTechDue = technicalServices.reduce((acc, o) => {
+    const fee = Number(o.technicianFee || 0);
+    const paid = Number(o.technicianPaidAmount || 0);
+    return acc + Math.max(0, fee - paid);
+  }, 0);
+  const pendingTechCount = technicalServices.filter((o) => {
+    const fee = Number(o.technicianFee || 0);
+    const paid = Number(o.technicianPaidAmount || 0);
+    return (fee - paid) > 0.009;
+  }).length;
 
   const handleDelete = async (order: TechnicalServiceOrder) => {
     if (window.confirm(`Tem certeza que deseja excluir a Ordem de Serviço ${order.orderNumber}?`)) {
@@ -88,6 +112,19 @@ export const TechnicalServicesView: React.FC = () => {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              setPreselectedTechForPayment(null);
+              setPreselectedServiceIdsForPayment([]);
+              setShowTechnicianPaymentModal(true);
+            }}
+            className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shadow-xs"
+            title="Pagar múltiplos serviços de um prestador em uma única operação"
+          >
+            <DollarSign className="w-4 h-4" />
+            Pagar Prestador
+          </button>
           <button
             type="button"
             onClick={() => setShowTechniciansModal(true)}
@@ -117,8 +154,8 @@ export const TechnicalServicesView: React.FC = () => {
         </div>
       </div>
 
-      {/* KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      {/* KPI Cards: Destacando Valores Pendentes e Repasses aos Técnicos */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs">
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-slate-500 uppercase">Faturamento Total</span>
@@ -145,17 +182,53 @@ export const TechnicalServicesView: React.FC = () => {
           <p className="text-2xs text-emerald-600 font-semibold mt-1">Valores quitados ou entradas</p>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs">
+        {/* Saldo a Receber dos Clientes - visualmente destacado */}
+        <div className="bg-amber-50/50 p-4 rounded-2xl border-2 border-amber-300 shadow-2xs relative">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-amber-700 uppercase">Saldo a Receber</span>
-            <div className="w-8 h-8 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center">
-              <Clock className="w-4 h-4" />
-            </div>
+            <span className="text-xs font-black text-amber-900 uppercase flex items-center gap-1.5">
+              <Clock className="w-4 h-4 text-amber-600" />
+              Saldo a Receber
+            </span>
+            <span className="px-2 py-0.5 rounded-full text-3xs font-extrabold bg-amber-200 text-amber-900 uppercase">
+              Clientes
+            </span>
           </div>
-          <div className="text-xl font-black text-amber-700 mt-2">
+          <div className="text-xl font-black text-amber-800 mt-2">
             {formatCurrency(totalRemaining)}
           </div>
-          <p className="text-2xs text-amber-600 font-semibold mt-1">Saldos pendentes de quitação</p>
+          <p className="text-2xs text-amber-800 font-bold mt-1">Saldos pendentes de quitação</p>
+        </div>
+
+        {/* Repasse a Prestadores (Técnicos) - visualmente destacado */}
+        <div className="bg-slate-50 p-4 rounded-2xl border-2 border-[#30334F]/20 shadow-2xs relative">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-black text-[#30334F] uppercase flex items-center gap-1.5">
+              <Users className="w-4 h-4 text-[#F28C1B]" />
+              Pendente c/ Técnicos
+            </span>
+            <span className="px-2 py-0.5 rounded-full text-3xs font-extrabold bg-purple-100 text-purple-900">
+              {pendingTechCount} O.S.
+            </span>
+          </div>
+          <div className="text-xl font-black text-[#30334F] mt-2">
+            {formatCurrency(totalTechDue)}
+          </div>
+          <div className="mt-1 flex items-center justify-between">
+            <p className="text-2xs text-slate-500 font-medium">Repasses a efetuar</p>
+            {totalTechDue > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  setPreselectedTechForPayment(null);
+                  setPreselectedServiceIdsForPayment([]);
+                  setShowTechnicianPaymentModal(true);
+                }}
+                className="text-2xs font-extrabold text-[#F28C1B] hover:underline cursor-pointer"
+              >
+                Pagar agora &rarr;
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -212,7 +285,7 @@ export const TechnicalServicesView: React.FC = () => {
                   <th className="py-3 px-4">O.S. & Data</th>
                   <th className="py-3 px-4">Cliente & Veículo</th>
                   <th className="py-3 px-4">Serviços Executados</th>
-                  <th className="py-3 px-4">Valores (Total / Pago)</th>
+                  <th className="py-3 px-4">Valores &amp; Saldos</th>
                   <th className="py-3 px-4">Pagamento</th>
                   <th className="py-3 px-4">Status</th>
                   <th className="py-3 px-4 text-right">Ações</th>
@@ -221,6 +294,7 @@ export const TechnicalServicesView: React.FC = () => {
               <tbody className="divide-y divide-slate-100">
                 {filteredOrders.map((order) => {
                   const isHighlighted = selectedDetailItem?.id === order.id;
+                  const techRemainingDue = Math.max(0, (order.technicianFee || 0) - (order.technicianPaidAmount || 0));
                   return (
                     <tr
                       key={order.id}
@@ -233,19 +307,55 @@ export const TechnicalServicesView: React.FC = () => {
                         <div className="font-mono font-black text-[#30334F]">
                           {order.orderNumber}
                         </div>
-                        <div className="text-2xs text-slate-400 flex items-center gap-1 mt-0.5">
+                        <div className="text-2xs text-slate-400 mt-0.5">
                           {formatDate(order.executionDate || order.createdAt)}
-                          {order.technicianName && (
-                            <span className="truncate max-w-[180px]">
-                              • Téc: {order.technicianName}
-                              {order.technicianFee !== undefined && order.technicianFee > 0 && (
-                                <span className={`ml-1 font-bold ${order.technicianPaymentStatus === 'pago' ? 'text-emerald-600' : 'text-amber-600'}`}>
-                                  ({formatCurrency(order.technicianFee)})
-                                </span>
-                              )}
-                            </span>
-                          )}
                         </div>
+                        {order.technicianName && (
+                          <div className="mt-1 flex flex-wrap items-center gap-1">
+                            <span className="text-2xs font-semibold text-slate-600 flex items-center gap-1 truncate max-w-[140px]">
+                              <User className="w-3 h-3 text-slate-400 shrink-0" />
+                              {order.technicianName}
+                            </span>
+                            {order.technicianFee !== undefined && order.technicianFee > 0 && (
+                              order.technicianPaymentStatus === 'pago' ? (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-3xs font-extrabold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                  <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
+                                  Téc. Pago ({formatCurrency(order.technicianFee)})
+                                </span>
+                              ) : order.technicianPaymentStatus === 'parcial' ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const tech = technicians.find((t) => t.id === order.technicianId || t.name === order.technicianName) || null;
+                                    setPreselectedTechForPayment(tech);
+                                    setPreselectedServiceIdsForPayment([order.id]);
+                                    setShowTechnicianPaymentModal(true);
+                                  }}
+                                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-3xs font-extrabold bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 transition cursor-pointer"
+                                  title="Clique para pagar saldo restante do técnico"
+                                >
+                                  <Clock className="w-2.5 h-2.5 text-amber-600" />
+                                  Téc. Resta {formatCurrency(techRemainingDue)}
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const tech = technicians.find((t) => t.id === order.technicianId || t.name === order.technicianName) || null;
+                                    setPreselectedTechForPayment(tech);
+                                    setPreselectedServiceIdsForPayment([order.id]);
+                                    setShowTechnicianPaymentModal(true);
+                                  }}
+                                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-3xs font-extrabold bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-300 transition cursor-pointer"
+                                  title="Clique para quitar valor deste técnico"
+                                >
+                                  <DollarSign className="w-2.5 h-2.5 text-rose-600" />
+                                  Pagar Téc. ({formatCurrency(order.technicianFee)})
+                                </button>
+                              )
+                            )}
+                          </div>
+                        )}
                       </td>
 
                       {/* Cliente e Veiculo */}
@@ -281,19 +391,27 @@ export const TechnicalServicesView: React.FC = () => {
                         </div>
                       </td>
 
-                      {/* Valores */}
+                      {/* Valores & Saldos (PARTE 2: Melhoria visual dos valores pendentes) */}
                       <td className="py-3.5 px-4">
-                        <div className="font-extrabold text-[#30334F]">
+                        <div className="font-black text-[#30334F] text-sm">
                           {formatCurrency(order.totalAmount)}
                         </div>
-                        <div className="text-2xs mt-0.5 flex items-center gap-1">
-                          <span className="text-emerald-700 font-semibold">
-                            Pago: {formatCurrency(order.paidAmount)}
-                          </span>
-                          {order.remainingBalance > 0 && (
-                            <span className="text-amber-700 font-semibold">
-                              • Resta: {formatCurrency(order.remainingBalance)}
-                            </span>
+                        <div className="mt-1 space-y-1">
+                          {order.remainingBalance > 0.009 ? (
+                            <div className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-2xs font-black bg-amber-100 text-amber-900 border border-amber-300 shadow-2xs">
+                              <Clock className="w-3 h-3 text-amber-700 shrink-0" />
+                              Pendente: {formatCurrency(order.remainingBalance)}
+                            </div>
+                          ) : (
+                            <div className="inline-flex items-center gap-1 text-2xs font-extrabold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
+                              <CheckCircle2 className="w-3 h-3 text-emerald-600 shrink-0" />
+                              Quitado 100%
+                            </div>
+                          )}
+                          {order.paidAmount > 0 && order.remainingBalance > 0.009 && (
+                            <div className="text-3xs text-emerald-700 font-bold">
+                              Entrada: {formatCurrency(order.paidAmount)}
+                            </div>
                           )}
                         </div>
                       </td>
@@ -308,20 +426,20 @@ export const TechnicalServicesView: React.FC = () => {
                       {/* Status */}
                       <td className="py-3.5 px-4">
                         <span
-                          className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-2xs font-extrabold uppercase ${
+                          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-2xs font-extrabold uppercase shadow-2xs ${
                             order.status === 'pago'
-                              ? 'bg-emerald-100 text-emerald-800'
+                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
                               : order.status === 'parcial'
-                              ? 'bg-amber-100 text-amber-800'
-                              : 'bg-red-100 text-red-800'
+                              ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                              : 'bg-rose-100 text-rose-800 border border-rose-300'
                           }`}
                         >
                           {order.status === 'pago' ? (
-                            <CheckCircle2 className="w-3 h-3" />
+                            <CheckCircle2 className="w-3 h-3 text-emerald-600" />
                           ) : order.status === 'parcial' ? (
-                            <Clock className="w-3 h-3" />
+                            <Clock className="w-3 h-3 text-amber-600" />
                           ) : (
-                            <AlertCircle className="w-3 h-3" />
+                            <AlertCircle className="w-3 h-3 text-rose-600" />
                           )}
                           {order.status}
                         </span>
@@ -330,6 +448,20 @@ export const TechnicalServicesView: React.FC = () => {
                       {/* Ações */}
                       <td className="py-3.5 px-4 text-right">
                         <div className="flex items-center justify-end gap-1">
+                          {techRemainingDue > 0.009 && (
+                            <button
+                              onClick={() => {
+                                const tech = technicians.find((t) => t.id === order.technicianId || t.name === order.technicianName) || null;
+                                setPreselectedTechForPayment(tech);
+                                setPreselectedServiceIdsForPayment([order.id]);
+                                setShowTechnicianPaymentModal(true);
+                              }}
+                              className="p-1.5 text-emerald-700 hover:text-emerald-900 hover:bg-emerald-50 rounded-lg transition cursor-pointer"
+                              title="Pagar Prestador desta O.S."
+                            >
+                              <DollarSign className="w-4 h-4" />
+                            </button>
+                          )}
                           <button
                             onClick={() => setViewingReceiptOrder(order)}
                             className="p-1.5 text-slate-600 hover:text-[#30334F] hover:bg-slate-100 rounded-lg transition cursor-pointer"
@@ -403,6 +535,36 @@ export const TechnicalServicesView: React.FC = () => {
       {/* Modal de Gestão de Tipos de Serviços */}
       {showServiceTypesModal && (
         <ServiceTypesModal onClose={() => setShowServiceTypesModal(false)} />
+      )}
+
+      {/* Modal de Pagamento de Múltiplos Serviços ao Técnico Prestador */}
+      {showTechnicianPaymentModal && (
+        <TechnicianPaymentModal
+          technician={preselectedTechForPayment}
+          initialSelectedServiceIds={preselectedServiceIdsForPayment}
+          onClose={() => {
+            setShowTechnicianPaymentModal(false);
+            setPreselectedTechForPayment(null);
+            setPreselectedServiceIdsForPayment([]);
+          }}
+          onSuccess={(paymentId) => {
+            setShowTechnicianPaymentModal(false);
+            setPreselectedTechForPayment(null);
+            setPreselectedServiceIdsForPayment([]);
+            const foundPayment = technicianPayments.find((p) => p.id === paymentId);
+            if (foundPayment) {
+              setViewingTechnicianReceipt(foundPayment);
+            }
+          }}
+        />
+      )}
+
+      {/* Modal de Comprovante de Pagamento ao Técnico */}
+      {viewingTechnicianReceipt && (
+        <TechnicianReceiptModal
+          payment={viewingTechnicianReceipt}
+          onClose={() => setViewingTechnicianReceipt(null)}
+        />
       )}
     </div>
   );

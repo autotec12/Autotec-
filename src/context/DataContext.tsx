@@ -111,6 +111,7 @@ interface DataContextType {
     paymentMethod: 'dinheiro' | 'pix' | string;
     notes?: string;
   }) => Promise<string>;
+  cancelTechnicianPayment: (paymentId: string, reason?: string) => Promise<void>;
 
   // Technical Service Types actions
   technicalServiceTypes: TechnicalServiceType[];
@@ -135,6 +136,9 @@ interface DataContextType {
   // Selected Detail Item for navigation from Gestão Geral to source module
   selectedDetailItem: { type: 'mensalidade' | 'servico_tecnico' | 'despesa'; id: string } | null;
   setSelectedDetailItem: (item: { type: 'mensalidade' | 'servico_tecnico' | 'despesa'; id: string } | null) => void;
+  // Selected Client ID for filtered billing/account navigation
+  selectedBillingClientId: string | null;
+  setSelectedBillingClientId: (clientId: string | null) => void;
   permissionNotice: string | null;
 
   // Settings
@@ -220,6 +224,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState(true);
   const [permissionNotice, setPermissionNotice] = useState<string | null>(null);
   const [selectedDetailItem, setSelectedDetailItem] = useState<{ type: 'mensalidade' | 'servico_tecnico' | 'despesa'; id: string } | null>(null);
+  const [selectedBillingClientId, setSelectedBillingClientId] = useState<string | null>(null);
 
   // Helper de erro de snapshot com tolerância a falhas para não travar a UI
   const handleSnapshotError = (error: unknown, operationType: OperationType, path: string) => {
@@ -1116,19 +1121,55 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const now = new Date().toISOString();
     const recNum = `REC-TEC-${now.slice(0, 7).replace('-', '')}-${Math.floor(1000 + Math.random() * 9000)}`;
 
+    const techObj = technicians.find((t) => t.id === params.technicianId);
     const ordersToUpdate = technicalServices.filter((s) => params.serviceIds.includes(s.id));
     const serviceOrderNumbers = ordersToUpdate.map((o) => o.orderNumber);
+
+    // Distribuir baixa e gerar detalhamento dos itens quitados
+    let remainingToDistribute = Number(params.amount);
+    const paymentItems: import('../types').TechnicianPaymentItem[] = [];
+
+    for (const service of ordersToUpdate) {
+      const currentFee = Number(service.technicianFee || 0);
+      const currentPaid = Number(service.technicianPaidAmount || 0);
+      const currentDue = Math.max(0, currentFee - currentPaid);
+
+      const payingForThis = remainingToDistribute > 0 ? Math.min(remainingToDistribute, currentDue > 0 ? currentDue : currentFee) : 0;
+      const newPaid = currentPaid + payingForThis;
+      const newRemaining = Math.max(0, currentFee - newPaid);
+      const newStatus: 'pendente' | 'parcial' | 'pago' = newRemaining <= 0.009 ? 'pago' : (newPaid > 0 ? 'parcial' : 'pendente');
+
+      paymentItems.push({
+        serviceId: service.id,
+        orderNumber: service.orderNumber,
+        executionDate: service.executionDate || service.createdAt,
+        clientName: service.clientName,
+        vehiclePlate: service.vehiclePlate,
+        vehicleModel: service.vehicleModel,
+        serviceCategory: service.items?.map((i) => i.category).join(', ') || 'Serviço Técnico',
+        technicianFee: currentFee,
+        paidInThisPayment: payingForThis,
+        remainingAfterThisPayment: newRemaining,
+        statusAfterThisPayment: newRemaining <= 0.009 ? 'pago' : 'parcial',
+      });
+
+      remainingToDistribute -= payingForThis;
+    }
 
     const paymentDoc: TechnicianPayment = {
       id,
       technicianId: params.technicianId,
       technicianName: params.technicianName,
+      technicianCpf: techObj?.cpf || '',
+      technicianPhone: techObj?.whatsapp || techObj?.phone || '',
       serviceIds: params.serviceIds,
       serviceOrderNumbers,
+      items: paymentItems,
       amount: Number(params.amount),
       paymentDate: params.paymentDate,
       paymentMethod: params.paymentMethod,
       receiptNumber: recNum,
+      status: 'confirmado',
       notes: params.notes || '',
       createdAt: now,
       createdBy: user?.uid || '',
@@ -1138,42 +1179,109 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // 1. Gravar comprovante do pagamento ao técnico
       await setDoc(doc(db, 'technician_payments', id), cleanFirestoreData(paymentDoc));
 
-      // 2. Distribuir baixa proporcional entre as O.S. selecionadas
-      let remainingToDistribute = Number(params.amount);
+      // 2. Atualizar as O.S. selecionadas vinculando este pagamento
+      for (const item of paymentItems) {
+        const service = ordersToUpdate.find((s) => s.id === item.serviceId);
+        if (!service) continue;
 
-      for (const service of ordersToUpdate) {
-        if (remainingToDistribute <= 0) break;
-        const currentFee = Number(service.technicianFee || 0);
         const currentPaid = Number(service.technicianPaidAmount || 0);
-        const currentDue = Math.max(0, currentFee - currentPaid);
-
-        if (currentDue <= 0) continue;
-
-        const payingForThis = Math.min(remainingToDistribute, currentDue);
-        const newPaid = currentPaid + payingForThis;
-        const newRemaining = Math.max(0, currentFee - newPaid);
-        const newStatus: 'pendente' | 'parcial' | 'pago' = newRemaining <= 0.009 ? 'pago' : 'parcial';
-
-        await updateDoc(doc(db, 'technical_services', service.id), cleanFirestoreData({
-          technicianPaidAmount: newPaid,
-          technicianRemainingBalance: newRemaining,
-          technicianPaymentStatus: newStatus,
+        await updateDoc(doc(db, 'technical_services', item.serviceId), cleanFirestoreData({
+          technicianPaidAmount: currentPaid + item.paidInThisPayment,
+          technicianRemainingBalance: item.remainingAfterThisPayment,
+          technicianPaymentStatus: item.statusAfterThisPayment,
+          technicianPaymentId: id,
+          technicianPaymentReceiptNumber: recNum,
+          technicianPaymentDate: params.paymentDate,
           updatedAt: now,
         }));
-
-        remainingToDistribute -= payingForThis;
       }
 
       await logAudit(
         'CREATE',
         'TechnicianPayment',
         id,
-        `Registrou pagamento de R$ ${Number(params.amount).toFixed(2)} ao técnico ${params.technicianName} referente a [${serviceOrderNumbers.join(', ')}]`
+        `Registrou quitação/pagamento ${recNum} de R$ ${Number(params.amount).toFixed(2)} ao técnico ${params.technicianName} referente a [${serviceOrderNumbers.join(', ')}]`
       );
+
+      setTechnicianPayments((prev) => [paymentDoc, ...prev.filter((p) => p.id !== id)]);
 
       return id;
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, `technician_payments/${id}`);
+      throw error;
+    }
+  };
+
+  // Cancel Technician Payment (Estorno auditado preservando histórico)
+  const cancelTechnicianPayment = async (paymentId: string, reason?: string) => {
+    const payment = technicianPayments.find((p) => p.id === paymentId);
+    if (!payment) {
+      throw new Error('Comprovante de pagamento ao técnico não encontrado.');
+    }
+    if (payment.status === 'cancelado') {
+      throw new Error('Este pagamento já foi cancelado anteriormente.');
+    }
+
+    const now = new Date().toISOString();
+
+    try {
+      // 1. Reverter saldos e status nas Ordens de Serviço vinculadas
+      if (payment.items && payment.items.length > 0) {
+        for (const item of payment.items) {
+          const service = technicalServices.find((s) => s.id === item.serviceId);
+          if (!service) continue;
+
+          const currentPaid = Number(service.technicianPaidAmount || 0);
+          const restoredPaid = Math.max(0, currentPaid - Number(item.paidInThisPayment || 0));
+          const fee = Number(service.technicianFee || 0);
+          const restoredRemaining = Math.max(0, fee - restoredPaid);
+          const restoredStatus: 'pendente' | 'parcial' | 'pago' =
+            restoredRemaining <= 0.009 ? 'pago' : (restoredPaid > 0 ? 'parcial' : 'pendente');
+
+          await updateDoc(doc(db, 'technical_services', item.serviceId), cleanFirestoreData({
+            technicianPaidAmount: restoredPaid,
+            technicianRemainingBalance: restoredRemaining,
+            technicianPaymentStatus: restoredStatus,
+            technicianPaymentId: restoredPaid === 0 ? null : (service.technicianPaymentId === paymentId ? null : service.technicianPaymentId),
+            technicianPaymentReceiptNumber: restoredPaid === 0 ? null : (service.technicianPaymentReceiptNumber === payment.receiptNumber ? null : service.technicianPaymentReceiptNumber),
+            updatedAt: now,
+          }));
+        }
+      } else {
+        // Fallback para pagamentos antigos
+        for (const serviceId of payment.serviceIds) {
+          const service = technicalServices.find((s) => s.id === serviceId);
+          if (!service) continue;
+          const fee = Number(service.technicianFee || 0);
+          await updateDoc(doc(db, 'technical_services', serviceId), cleanFirestoreData({
+            technicianPaidAmount: 0,
+            technicianRemainingBalance: fee,
+            technicianPaymentStatus: 'pendente',
+            technicianPaymentId: null,
+            technicianPaymentReceiptNumber: null,
+            updatedAt: now,
+          }));
+        }
+      }
+
+      // 2. Marcar comprovante como cancelado no Firestore
+      await updateDoc(doc(db, 'technician_payments', paymentId), cleanFirestoreData({
+        status: 'cancelado',
+        cancelledAt: now,
+        cancelledBy: user?.uid || '',
+        cancellationReason: reason?.trim() || 'Cancelamento solicitado pelo operador',
+        updatedAt: now,
+      }));
+
+      // 3. Registrar auditoria forense do cancelamento
+      await logAudit(
+        'CANCEL',
+        'TechnicianPayment',
+        paymentId,
+        `Cancelou pagamento ao técnico ${payment.technicianName} (Recibo: ${payment.receiptNumber || paymentId}, Valor: R$ ${payment.amount.toFixed(2)}). Motivo: ${reason?.trim() || 'Não informado'}`
+      );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `technician_payments/${paymentId}`);
       throw error;
     }
   };
@@ -2010,6 +2118,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         toggleTechnicianStatus,
         technicianPayments,
         recordTechnicianPayment,
+        cancelTechnicianPayment,
         technicalServiceTypes,
         addTechnicalServiceType,
         updateTechnicalServiceType,
@@ -2026,6 +2135,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         toggleExpenseCategoryStatus,
         selectedDetailItem,
         setSelectedDetailItem,
+        selectedBillingClientId,
+        setSelectedBillingClientId,
         permissionNotice,
         updateCompanySettings,
         seedDemoData,

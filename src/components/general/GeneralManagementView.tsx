@@ -36,6 +36,7 @@ export const GeneralManagementView: React.FC<GeneralManagementViewProps> = ({ on
     technicalServices,
     companyExpenses,
     setSelectedDetailItem,
+    setSelectedBillingClientId,
   } = useData();
 
   const [period, setPeriod] = useState<PeriodType>('este_mes');
@@ -109,7 +110,7 @@ export const GeneralManagementView: React.FC<GeneralManagementViewProps> = ({ on
   const allTransactions: GeneralTransaction[] = useMemo(() => {
     const list: GeneralTransaction[] = [];
 
-    // 1. Mensalidades Payments
+    // 1. Mensalidades: Pagamentos realizados
     payments.forEach((p) => {
       const date = (p.paymentDate || p.createdAt || '').slice(0, 10);
       list.push({
@@ -123,8 +124,46 @@ export const GeneralManagementView: React.FC<GeneralManagementViewProps> = ({ on
         paymentMethod: p.paymentMethod,
         amount: Number(p.amount) || 0,
         status: 'pago',
-        rawRecordId: p.id,
+        rawRecordId: p.chargeId || p.id,
+        clientId: p.clientId,
       });
+    });
+
+    // 1.1 Mensalidades: Cobranças pendentes ou com saldo restante
+    charges.forEach((c) => {
+      if (c.status === 'pendente') {
+        const date = (c.dueDate || c.createdAt || '').slice(0, 10);
+        list.push({
+          id: `chg_pend_${c.id}`,
+          date,
+          type: 'receita',
+          origin: 'mensalidade',
+          identifier: `FAT-${c.referenceMonth || c.id.slice(0, 6)}`,
+          description: `Mensalidade (Pendente): ${c.clientName} - Placa ${c.vehiclePlate || 'N/I'}`,
+          partyName: c.clientName,
+          paymentMethod: undefined,
+          amount: Number(c.remainingBalance || c.totalAmount) || 0,
+          status: 'pendente',
+          rawRecordId: c.id,
+          clientId: c.clientId,
+        });
+      } else if (c.status === 'parcial' && c.remainingBalance > 0.009) {
+        const date = (c.balanceScheduledDate || c.dueDate || c.createdAt || '').slice(0, 10);
+        list.push({
+          id: `chg_parc_${c.id}`,
+          date,
+          type: 'receita',
+          origin: 'mensalidade',
+          identifier: `FAT-${c.referenceMonth || c.id.slice(0, 6)}`,
+          description: `Mensalidade (Saldo Pendente): ${c.clientName} - Placa ${c.vehiclePlate || 'N/I'}`,
+          partyName: c.clientName,
+          paymentMethod: undefined,
+          amount: Number(c.remainingBalance) || 0,
+          status: 'parcial',
+          rawRecordId: c.id,
+          clientId: c.clientId,
+        });
+      }
     });
 
     // 2. Technical Services
@@ -145,6 +184,7 @@ export const GeneralManagementView: React.FC<GeneralManagementViewProps> = ({ on
           amount: Number(s.paidAmount) || 0,
           status: s.status,
           rawRecordId: s.id,
+          clientId: s.clientId,
         });
       } else {
         list.push({
@@ -159,6 +199,7 @@ export const GeneralManagementView: React.FC<GeneralManagementViewProps> = ({ on
           amount: Number(s.totalAmount) || 0,
           status: 'pendente',
           rawRecordId: s.id,
+          clientId: s.clientId,
         });
       }
     });
@@ -200,7 +241,7 @@ export const GeneralManagementView: React.FC<GeneralManagementViewProps> = ({ on
     });
 
     return list.sort((a, b) => b.date.localeCompare(a.date));
-  }, [payments, technicalServices, companyExpenses]);
+  }, [payments, charges, technicalServices, companyExpenses]);
 
   // Filter transactions by active date range
   const periodTransactions = useMemo(() => {
@@ -216,10 +257,13 @@ export const GeneralManagementView: React.FC<GeneralManagementViewProps> = ({ on
     let expensesPaid = 0;
 
     periodTransactions.forEach((t) => {
-      if (t.status === 'pago' || t.status === 'parcial') {
+      if (t.status === 'pago') {
         if (t.origin === 'mensalidade') monthlyReceived += t.amount;
         if (t.origin === 'servico_tecnico') servicesReceived += t.amount;
         if (t.origin === 'despesa') expensesPaid += t.amount;
+      } else if (t.status === 'parcial') {
+        if (t.origin === 'servico_tecnico' && t.id.startsWith('ts_pay_')) servicesReceived += t.amount;
+        if (t.origin === 'despesa' && t.id.startsWith('exp_pay_')) expensesPaid += t.amount;
       }
     });
 
@@ -407,9 +451,22 @@ export const GeneralManagementView: React.FC<GeneralManagementViewProps> = ({ on
     };
   }, [periodTransactions]);
 
-  // Click on a transaction to navigate to its original module
+  // Click on a transaction to navigate to its original module / client account
   const handleInspectOriginal = (tx: GeneralTransaction) => {
     if (tx.origin === 'mensalidade') {
+      let targetClientId = tx.clientId;
+      if (!targetClientId) {
+        const chg = charges.find((c) => c.id === tx.rawRecordId);
+        if (chg) {
+          targetClientId = chg.clientId;
+        } else {
+          const p = payments.find((pay) => pay.id === tx.rawRecordId || pay.chargeId === tx.rawRecordId);
+          if (p) targetClientId = p.clientId;
+        }
+      }
+      if (targetClientId) {
+        setSelectedBillingClientId(targetClientId);
+      }
       setSelectedDetailItem({ type: 'mensalidade', id: tx.rawRecordId });
       onNavigate('billing');
     } else if (tx.origin === 'servico_tecnico') {
@@ -567,42 +624,104 @@ export const GeneralManagementView: React.FC<GeneralManagementViewProps> = ({ on
         </div>
       </div>
 
-      {/* Secondary Cards: Valores a Receber & a Pagar */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        {/* Valores a Receber */}
-        <div className="bg-amber-50/60 p-4 rounded-2xl border border-amber-200/80 shadow-2xs">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Clock className="w-4 h-4 text-amber-600" />
-              <span className="text-xs font-bold text-amber-900 uppercase">
-                Valores Pendentes a Receber
+      {/* Secondary Cards: Valores a Receber & a Pagar (Ajuste Fino de Tipografia e Espaçamento) */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Card 1: Valores Pendentes a Receber */}
+        <div className="bg-white p-4 sm:p-5 sm:p-6 rounded-2xl border border-amber-200/90 shadow-2xs relative overflow-hidden transition hover:shadow-xs flex flex-col justify-between">
+          <div>
+            {/* Header: Ícone, Título e Etiqueta com Espaçamento Ajustado */}
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
+                  <Clock className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                </div>
+                <span className="text-[11px] sm:text-xs font-bold text-amber-950 uppercase tracking-wide leading-tight">
+                  Valores Pendentes a Receber
+                </span>
+              </div>
+              <span className="px-2 py-0.5 rounded-full text-3xs font-black bg-amber-100 text-amber-900 border border-amber-200 uppercase shrink-0">
+                A Receber
               </span>
             </div>
-            <span className="text-sm font-black text-amber-900">
-              {formatCurrency(summary.totalPendingReceivables)}
-            </span>
+
+            {/* Total Geral em Destaque */}
+            <div className="mt-3 sm:mt-3.5">
+              <span className="text-3xs sm:text-2xs font-bold text-slate-400 uppercase tracking-wider block">
+                Total Geral
+              </span>
+              <div className="text-2xl sm:text-3xl font-black text-[#30334F] mt-0.5 tracking-tight">
+                {formatCurrency(summary.totalPendingReceivables)}
+              </div>
+            </div>
           </div>
-          <div className="grid grid-cols-2 gap-2 mt-2 pt-2 border-t border-amber-200/60 text-2xs text-amber-800">
-            <div>Mensalidades em aberto: <strong>{formatCurrency(summary.monthlyPending)}</strong></div>
-            <div>Serviços técnicos em aberto: <strong>{formatCurrency(summary.servicesPending)}</strong></div>
+
+          {/* Subtotais em blocos visualmente bem separados */}
+          <div className="mt-3.5 pt-3 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {/* Mensalidades em Aberto */}
+            <div className="px-3 py-2 sm:px-3.5 sm:py-2.5 bg-amber-50/70 rounded-xl border border-amber-200/70 flex items-center justify-between gap-2">
+              <span className="text-2xs sm:text-xs font-medium text-amber-950">
+                Mensalidades em aberto:
+              </span>
+              <span className="text-xs sm:text-sm font-black text-amber-950 shrink-0 text-right">
+                {formatCurrency(summary.monthlyPending)}
+              </span>
+            </div>
+
+            {/* Serviços Técnicos em Aberto */}
+            <div className="px-3 py-2 sm:px-3.5 sm:py-2.5 bg-amber-50/70 rounded-xl border border-amber-200/70 flex items-center justify-between gap-2">
+              <span className="text-2xs sm:text-xs font-medium text-amber-950">
+                Serviços técnicos em aberto:
+              </span>
+              <span className="text-xs sm:text-sm font-black text-amber-950 shrink-0 text-right">
+                {formatCurrency(summary.servicesPending)}
+              </span>
+            </div>
           </div>
         </div>
 
-        {/* Despesas a Quitar */}
-        <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 shadow-2xs">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 text-slate-600" />
-              <span className="text-xs font-bold text-slate-800 uppercase">
-                Despesas Pendentes a Quitar
+        {/* Card 2: Despesas Pendentes a Quitar */}
+        <div className="bg-white p-4 sm:p-5 sm:p-6 rounded-2xl border border-slate-200 shadow-2xs relative overflow-hidden transition hover:shadow-xs flex flex-col justify-between">
+          <div>
+            {/* Header: Ícone, Título e Etiqueta com Espaçamento Ajustado */}
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-slate-100 text-slate-700 flex items-center justify-center shrink-0">
+                  <AlertCircle className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-slate-600" />
+                </div>
+                <span className="text-[11px] sm:text-xs font-bold text-slate-800 uppercase tracking-wide leading-tight">
+                  Despesas Pendentes a Quitar
+                </span>
+              </div>
+              <span className="px-2 py-0.5 rounded-full text-3xs font-black bg-slate-100 text-slate-700 border border-slate-200 uppercase shrink-0">
+                A Quitar
               </span>
             </div>
-            <span className="text-sm font-black text-slate-800">
-              {formatCurrency(summary.totalPendingPayables)}
-            </span>
+
+            {/* Total Geral em Destaque */}
+            <div className="mt-3 sm:mt-3.5">
+              <span className="text-3xs sm:text-2xs font-bold text-slate-400 uppercase tracking-wider block">
+                Total Geral
+              </span>
+              <div
+                className={`text-2xl sm:text-3xl font-black mt-0.5 tracking-tight ${
+                  (Number(summary.totalPendingPayables) || 0) > 0 ? 'text-red-600' : 'text-slate-800'
+                }`}
+              >
+                {formatCurrency(summary.totalPendingPayables)}
+              </div>
+            </div>
           </div>
-          <div className="mt-2 pt-2 border-t border-slate-200/60 text-2xs text-slate-600">
-            Compras a prazo ou saldos pendentes: <strong>{formatCurrency(summary.expensesPending)}</strong>
+
+          {/* Subtotal / Descrição mais discreta e organizada */}
+          <div className="mt-3.5 pt-3 border-t border-slate-100">
+            <div className="px-3 py-2 sm:px-3.5 sm:py-2.5 bg-slate-50 rounded-xl border border-slate-200/80 flex items-center justify-between gap-2">
+              <span className="text-2xs sm:text-xs font-medium text-slate-600">
+                Compras a prazo ou saldos pendentes:
+              </span>
+              <span className="text-xs sm:text-sm font-black text-slate-800 shrink-0 text-right">
+                {formatCurrency(summary.expensesPending)}
+              </span>
+            </div>
           </div>
         </div>
       </div>
