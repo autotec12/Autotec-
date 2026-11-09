@@ -178,6 +178,15 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // Fixed Expenses (Despesas Fixas e Recorrentes da Empresa)
+    match /fixed_expenses/{fixedExpenseId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(fixedExpenseId) &&
+        incoming().name is string && incoming().name.size() > 0 && incoming().name.size() <= 150 &&
+        incoming().status in ['ativa', 'pausada', 'encerrada'];
+      allow delete: if isAdmin();
+    }
+
     // Company Expenses (Gastos da Empresa: Apoio, Chips, Sistema, Rastreadores, etc.)
     match /company_expenses/{expenseId} {
       allow read: if isSignedIn();

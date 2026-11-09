@@ -5,6 +5,7 @@ import { formatCurrency, formatDate } from '../../lib/calculations';
 import { CompanyExpenseModal } from './CompanyExpenseModal';
 import { ExpenseVoucherModal } from './ExpenseVoucherModal';
 import { ExpenseCategoriesModal } from './ExpenseCategoriesModal';
+import { FixedExpensesList } from './FixedExpensesList';
 import {
   ShoppingBag,
   Plus,
@@ -21,7 +22,10 @@ import {
   TrendingDown,
   Receipt,
   Package,
+  Layers,
+  Repeat,
 } from 'lucide-react';
+import { getCompetenceLabel } from '../../lib/calculations';
 
 const DEFAULT_EXPENSE_CATEGORIES: string[] = [
   'Apoio Rastreamento',
@@ -38,7 +42,23 @@ const DEFAULT_EXPENSE_CATEGORIES: string[] = [
 ];
 
 export const CompanyExpensesView: React.FC = () => {
-  const { companyExpenses, customExpenseCategories, deleteCompanyExpense, selectedDetailItem, setSelectedDetailItem } = useData();
+  const {
+    companyExpenses,
+    customExpenseCategories,
+    deleteCompanyExpense,
+    selectedDetailItem,
+    setSelectedDetailItem,
+    fixedExpenses,
+    addFixedExpense,
+    updateFixedExpense,
+    pauseFixedExpense,
+    resumeFixedExpense,
+    closeFixedExpense,
+    deleteFixedExpense,
+    generateFixedExpenseOccurrences,
+  } = useData();
+
+  const [activeTab, setActiveTab] = useState<'gastos' | 'fixas'>('gastos');
 
   const [searchTerm, setSearchTerm] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
@@ -82,6 +102,19 @@ export const CompanyExpensesView: React.FC = () => {
   const totalPaid = companyExpenses.reduce((acc, e) => acc + (e.paidAmount || 0), 0);
   const totalRemaining = companyExpenses.reduce((acc, e) => acc + (e.remainingBalance || 0), 0);
 
+  // Current competence and pending occurrences calculation
+  const now = new Date();
+  const currentCompetence = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const pendingOccurrencesThisMonth = useMemo(() => {
+    return fixedExpenses.filter((fe) => {
+      if (fe.status !== 'ativa') return false;
+      const already = companyExpenses.some(
+        (ce) => ce.fixedExpenseId === fe.id && ce.competence === currentCompetence
+      );
+      return !already;
+    }).length;
+  }, [fixedExpenses, companyExpenses, currentCompetence]);
+
   const handleDelete = async (expense: CompanyExpense) => {
     if (window.confirm(`Tem certeza que deseja excluir o registro de despesa ${expense.expenseNumber}?`)) {
       await deleteCompanyExpense(expense.id);
@@ -100,33 +133,124 @@ export const CompanyExpensesView: React.FC = () => {
             <span className="px-2.5 py-0.5 rounded-full text-xs font-extrabold bg-red-500/15 text-red-600 border border-red-500/30">
               {companyExpenses.length} Despesas
             </span>
+            {fixedExpenses.length > 0 && (
+              <span className="px-2.5 py-0.5 rounded-full text-xs font-extrabold bg-indigo-500/15 text-indigo-700 border border-indigo-500/30">
+                {fixedExpenses.length} Fixas
+              </span>
+            )}
           </div>
           <p className="text-xs text-[#5F647E] mt-0.5">
             Registro de compras e custos operacionais com emissão de Comprovante de Despesa unificado
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setShowCategoriesModal(true)}
-            className="px-3 py-2 bg-white border border-slate-300 hover:border-[#30334F] text-[#30334F] rounded-xl text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
-          >
-            <Package className="w-4 h-4 text-[#F28C1B]" />
-            Itens e Insumos
-          </button>
-          <button
-            onClick={() => {
-              setExpenseToEdit(null);
-              setIsModalOpen(true);
-            }}
-            className="px-4 py-2 bg-[#F28C1B] hover:bg-[#DE7B0E] text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition cursor-pointer"
-          >
-            <Plus className="w-4 h-4" />
-            Nova Despesa / Compra
-          </button>
-        </div>
+        {activeTab === 'gastos' && (
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowCategoriesModal(true)}
+              className="px-3 py-2 bg-white border border-slate-300 hover:border-[#30334F] text-[#30334F] rounded-xl text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
+            >
+              <Package className="w-4 h-4 text-[#F28C1B]" />
+              Itens e Insumos
+            </button>
+            <button
+              onClick={() => {
+                setExpenseToEdit(null);
+                setIsModalOpen(true);
+              }}
+              className="px-4 py-2 bg-[#F28C1B] hover:bg-[#DE7B0E] text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition cursor-pointer"
+            >
+              <Plus className="w-4 h-4" />
+              Nova Despesa / Compra
+            </button>
+          </div>
+        )}
       </div>
+
+      {/* Sub-Navigation Tabs */}
+      <div className="flex items-center gap-2 border-b border-slate-200 pb-3">
+        <button
+          type="button"
+          onClick={() => setActiveTab('gastos')}
+          className={`px-4 py-2 rounded-xl text-xs font-black flex items-center gap-2 transition cursor-pointer ${
+            activeTab === 'gastos'
+              ? 'bg-[#30334F] text-white shadow-sm'
+              : 'bg-white text-slate-600 hover:text-slate-900 border border-slate-200'
+          }`}
+        >
+          <ShoppingBag className="w-4 h-4 text-[#F28C1B]" />
+          <span>Lançamentos e Compras</span>
+          <span
+            className={`px-2 py-0.5 rounded-full text-2xs font-extrabold ${
+              activeTab === 'gastos' ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600'
+            }`}
+          >
+            {companyExpenses.length}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('fixas')}
+          className={`px-4 py-2 rounded-xl text-xs font-black flex items-center gap-2 transition cursor-pointer relative ${
+            activeTab === 'fixas'
+              ? 'bg-[#30334F] text-white shadow-sm'
+              : 'bg-white text-slate-600 hover:text-slate-900 border border-slate-200'
+          }`}
+        >
+          <Repeat className="w-4 h-4 text-[#F28C1B]" />
+          <span>Despesas Fixas e Recorrentes</span>
+          <span
+            className={`px-2 py-0.5 rounded-full text-2xs font-extrabold ${
+              activeTab === 'fixas' ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600'
+            }`}
+          >
+            {fixedExpenses.length}
+          </span>
+          {pendingOccurrencesThisMonth > 0 && (
+            <span
+              className="inline-flex items-center justify-center px-1.5 py-0.2 rounded-full text-[10px] font-black bg-amber-500 text-white"
+              title={`${pendingOccurrencesThisMonth} despesas aguardando conferência nesta competência`}
+            >
+              {pendingOccurrencesThisMonth}
+            </span>
+          )}
+        </button>
+      </div>
+
+      {activeTab === 'fixas' ? (
+        <FixedExpensesList
+          fixedExpenses={fixedExpenses}
+          companyExpenses={companyExpenses}
+          addFixedExpense={addFixedExpense}
+          updateFixedExpense={updateFixedExpense}
+          pauseFixedExpense={pauseFixedExpense}
+          resumeFixedExpense={resumeFixedExpense}
+          closeFixedExpense={closeFixedExpense}
+          deleteFixedExpense={deleteFixedExpense}
+          generateOccurrences={generateFixedExpenseOccurrences}
+        />
+      ) : (
+        <>
+          {/* Pending occurrences alert banner on main expenses tab */}
+          {pendingOccurrencesThisMonth > 0 && (
+            <div className="bg-linear-to-r from-amber-500/10 via-orange-500/10 to-amber-500/10 border border-amber-300 p-3.5 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+              <div className="flex items-center gap-2.5">
+                <Clock className="w-4 h-4 text-amber-600 shrink-0" />
+                <span className="text-amber-950 font-bold">
+                  Aviso: Existem <strong>{pendingOccurrencesThisMonth}</strong> despesas fixas com ocorrências previstas para a competência {getCompetenceLabel(currentCompetence)} aguardando sua conferência.
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveTab('fixas')}
+                className="px-3.5 py-1.5 bg-[#F28C1B] hover:bg-[#DE7B0E] text-white font-black rounded-xl shrink-0 transition text-2xs cursor-pointer shadow-2xs"
+              >
+                Revisar Despesas Fixas
+              </button>
+            </div>
+          )}
 
       {/* KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -255,11 +379,26 @@ export const CompanyExpensesView: React.FC = () => {
                     >
                       {/* Despesa e Data */}
                       <td className="py-3.5 px-4">
-                        <div className="font-mono font-black text-[#30334F]">
-                          {exp.expenseNumber}
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-mono font-black text-[#30334F]">
+                            {exp.expenseNumber}
+                          </span>
+                          {exp.isFixedExpense && (
+                            <span
+                              className="px-1.5 py-0.5 rounded text-[10px] font-black bg-indigo-50 text-indigo-700 border border-indigo-200"
+                              title={`Origem: Despesa Fixa${exp.competence ? ` (Competência: ${exp.competence})` : ''}`}
+                            >
+                              Fixa
+                            </span>
+                          )}
                         </div>
                         <div className="text-2xs text-slate-400 mt-0.5">
                           {formatDate(exp.date || exp.createdAt)}
+                          {exp.competence && (
+                            <span className="ml-1 text-slate-500 font-semibold">
+                              • Comp: {exp.competence}
+                            </span>
+                          )}
                         </div>
                       </td>
 
@@ -379,6 +518,8 @@ export const CompanyExpensesView: React.FC = () => {
           </div>
         )}
       </div>
+        </>
+      )}
 
       {/* Modal de Criar/Editar */}
       {isModalOpen && (

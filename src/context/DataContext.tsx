@@ -30,9 +30,10 @@ import {
   TechnicianPayment,
   TechnicalServiceType,
   ExpenseCategoryItem,
+  FixedExpense,
 } from '../types';
 import { useAuth } from './AuthContext';
-import { getCurrentMonthStr, getTodayIsoDate } from '../lib/calculations';
+import { getCurrentMonthStr, getTodayIsoDate, getCompetenceLabel } from '../lib/calculations';
 
 interface DataContextType {
   clients: Client[];
@@ -133,6 +134,16 @@ interface DataContextType {
   deleteExpenseCategory: (id: string) => Promise<void>;
   toggleExpenseCategoryStatus: (id: string) => Promise<void>;
 
+  // Fixed Expenses actions
+  fixedExpenses: FixedExpense[];
+  addFixedExpense: (data: Omit<FixedExpense, 'id' | 'createdAt' | 'updatedAt'>) => Promise<string>;
+  updateFixedExpense: (id: string, data: Partial<FixedExpense>) => Promise<void>;
+  pauseFixedExpense: (id: string) => Promise<void>;
+  resumeFixedExpense: (id: string) => Promise<void>;
+  closeFixedExpense: (id: string) => Promise<void>;
+  deleteFixedExpense: (id: string) => Promise<void>;
+  generateFixedExpenseOccurrences: (occurrences: { fixedExpenseId: string; competence: string; amount: number; dueDate: string; notes?: string }[]) => Promise<{ created: number; skipped: number }>;
+
   // Selected Detail Item for navigation from Gestão Geral to source module
   selectedDetailItem: { type: 'mensalidade' | 'servico_tecnico' | 'despesa'; id: string } | null;
   setSelectedDetailItem: (item: { type: 'mensalidade' | 'servico_tecnico' | 'despesa'; id: string } | null) => void;
@@ -219,6 +230,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [technicianPayments, setTechnicianPayments] = useState<TechnicianPayment[]>([]);
   const [technicalServiceTypes, setTechnicalServiceTypes] = useState<TechnicalServiceType[]>([]);
   const [customExpenseCategories, setCustomExpenseCategories] = useState<ExpenseCategoryItem[]>([]);
+  const [fixedExpenses, setFixedExpenses] = useState<FixedExpense[]>([]);
   const [companySettings, setCompanySettings] = useState<CompanySettings>(defaultSettings);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(true);
@@ -251,6 +263,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setTechnicianPayments([]);
       setTechnicalServiceTypes([]);
       setCustomExpenseCategories([]);
+      setFixedExpenses([]);
       setAuditLogs([]);
       setLoading(false);
       return;
@@ -446,6 +459,21 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     );
 
+    // 11.1 Fixed Expenses (Despesas Fixas e Custos Recorrentes)
+    const unsubFixedExpenses = onSnapshot(
+      collection(db, 'fixed_expenses'),
+      (snap) => {
+        const list: FixedExpense[] = [];
+        snap.forEach((docSnap) => {
+          list.push({ id: docSnap.id, ...docSnap.data() } as FixedExpense);
+        });
+        setFixedExpenses(list.sort((a, b) => (a.name || '').localeCompare(b.name || '')));
+      },
+      (error) => {
+        handleSnapshotError(error, OperationType.LIST, 'fixed_expenses');
+      }
+    );
+
     // 12. Technician Payments
     const unsubTechPayments = onSnapshot(
       collection(db, 'technician_payments'),
@@ -498,6 +526,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       unsubTechPayments();
       unsubServiceTypes();
       unsubExpCategories();
+      unsubFixedExpenses();
       unsubAudit();
     };
   }, [user?.uid]);
@@ -1377,6 +1406,205 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  // ==========================================
+  // FIXED EXPENSES ACTIONS (DESPESAS FIXAS)
+  // ==========================================
+  const addFixedExpense = async (data: Omit<FixedExpense, 'id' | 'createdAt' | 'updatedAt'>) => {
+    const id = `fix_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const now = new Date().toISOString();
+    const newFixedExpense: FixedExpense = {
+      ...data,
+      id,
+      name: data.name?.trim() || 'Despesa Fixa',
+      supplier: data.supplier?.trim() || '',
+      category: data.category?.trim() || 'Outros gastos recorrentes',
+      valueType: data.valueType || 'fixo',
+      amount: data.valueType === 'fixo' ? Number(data.amount || 0) : 0,
+      status: data.status || 'ativa',
+      dueDay: Math.min(31, Math.max(1, Number(data.dueDay) || 10)),
+      createdAt: now,
+      updatedAt: now,
+      createdBy: user?.uid || '',
+    };
+    try {
+      await setDoc(doc(db, 'fixed_expenses', id), cleanFirestoreData(newFixedExpense));
+      await logAudit(
+        'CREATE',
+        'FixedExpense',
+        id,
+        `Cadastrou despesa fixa "${newFixedExpense.name}" (${newFixedExpense.category}) - ${newFixedExpense.valueType === 'fixo' ? `R$ ${newFixedExpense.amount?.toFixed(2)}` : 'Valor Variável'}`
+      );
+      return id;
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `fixed_expenses/${id}`);
+      throw error;
+    }
+  };
+
+  const updateFixedExpense = async (id: string, data: Partial<FixedExpense>) => {
+    try {
+      const now = new Date().toISOString();
+      const existing = fixedExpenses.find((f) => f.id === id);
+      const payload: Partial<FixedExpense> = {
+        ...data,
+        updatedAt: now,
+      };
+      if (data.valueType === 'fixo' && data.amount !== undefined) {
+        payload.amount = Number(data.amount);
+      } else if (data.valueType === 'variavel') {
+        payload.amount = 0;
+      }
+      if (data.dueDay !== undefined) {
+        payload.dueDay = Math.min(31, Math.max(1, Number(data.dueDay)));
+      }
+      await updateDoc(doc(db, 'fixed_expenses', id), cleanFirestoreData(payload));
+      await logAudit('UPDATE', 'FixedExpense', id, `Atualizou cadastro da despesa fixa "${existing?.name || id}"`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `fixed_expenses/${id}`);
+      throw error;
+    }
+  };
+
+  const pauseFixedExpense = async (id: string) => {
+    try {
+      const existing = fixedExpenses.find((f) => f.id === id);
+      await updateDoc(doc(db, 'fixed_expenses', id), {
+        status: 'pausada',
+        updatedAt: new Date().toISOString(),
+      });
+      await logAudit('PAUSE', 'FixedExpense', id, `Pausou recorrência da despesa fixa "${existing?.name || id}"`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `fixed_expenses/${id}`);
+      throw error;
+    }
+  };
+
+  const resumeFixedExpense = async (id: string) => {
+    try {
+      const existing = fixedExpenses.find((f) => f.id === id);
+      await updateDoc(doc(db, 'fixed_expenses', id), {
+        status: 'ativa',
+        updatedAt: new Date().toISOString(),
+      });
+      await logAudit('RESUME', 'FixedExpense', id, `Reativou recorrência da despesa fixa "${existing?.name || id}"`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `fixed_expenses/${id}`);
+      throw error;
+    }
+  };
+
+  const closeFixedExpense = async (id: string) => {
+    try {
+      const existing = fixedExpenses.find((f) => f.id === id);
+      await updateDoc(doc(db, 'fixed_expenses', id), {
+        status: 'encerrada',
+        updatedAt: new Date().toISOString(),
+      });
+      await logAudit('CLOSE', 'FixedExpense', id, `Encerrou recorrência da despesa fixa "${existing?.name || id}"`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `fixed_expenses/${id}`);
+      throw error;
+    }
+  };
+
+  const deleteFixedExpense = async (id: string) => {
+    try {
+      const existing = fixedExpenses.find((f) => f.id === id);
+      const linkedCount = companyExpenses.filter((e) => e.fixedExpenseId === id).length;
+      await deleteDoc(doc(db, 'fixed_expenses', id));
+      await logAudit(
+        'DELETE',
+        'FixedExpense',
+        id,
+        `Excluiu modelo de despesa fixa "${existing?.name || id}". ${linkedCount} ocorrências financeiras históricas preservadas nos Gastos da Empresa.`
+      );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `fixed_expenses/${id}`);
+      throw error;
+    }
+  };
+
+  const generateFixedExpenseOccurrences = async (
+    occurrences: { fixedExpenseId: string; competence: string; amount: number; dueDate: string }[]
+  ) => {
+    let created = 0;
+    let skipped = 0;
+    const now = new Date().toISOString();
+
+    for (const occ of occurrences) {
+      const fix = fixedExpenses.find((f) => f.id === occ.fixedExpenseId);
+      if (!fix) {
+        skipped++;
+        continue;
+      }
+
+      // Prevenir duplicidade estrita por fixedExpenseId + competência
+      const alreadyExists = companyExpenses.some(
+        (e) => (e.fixedExpenseId === occ.fixedExpenseId || e.id.includes(occ.fixedExpenseId)) && e.competence === occ.competence
+      );
+
+      if (alreadyExists) {
+        skipped++;
+        continue;
+      }
+
+      const id = `exp_fix_${occ.fixedExpenseId}_${occ.competence.replace(/[^a-zA-Z0-9]/g, '_')}`;
+      const expNum = `DESP-${occ.competence.replace('-', '')}-${Math.floor(1000 + Math.random() * 9000)}`;
+      const vouchNum = `COMP-${occ.competence.replace('-', '')}-${Math.floor(1000 + Math.random() * 9000)}`;
+      const confirmedAmount = Math.max(0, Number(occ.amount) || 0);
+
+      const newExpense: CompanyExpense = {
+        id,
+        expenseNumber: expNum,
+        voucherNumber: vouchNum,
+        date: occ.dueDate || getTodayIsoDate(),
+        dueDate: occ.dueDate || getTodayIsoDate(),
+        supplier: fix.supplier || 'Beneficiário',
+        operationDescription: `Despesa Fixa (${getCompetenceLabel(occ.competence)}): ${fix.name}`,
+        items: [
+          {
+            id: `item_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+            category: fix.category || 'Outros gastos recorrentes',
+            description: `${fix.name} - Competência ${getCompetenceLabel(occ.competence)}`,
+            quantity: 1,
+            unitPrice: confirmedAmount,
+            subtotal: confirmedAmount,
+          },
+        ],
+        subtotal: confirmedAmount,
+        discount: 0,
+        totalAmount: confirmedAmount,
+        paidAmount: 0,
+        remainingBalance: confirmedAmount,
+        paymentMethod: 'pix',
+        status: 'pendente',
+        notes: fix.notes ? `[Despesa Fixa: ${fix.name}] ${fix.notes}` : `Lançamento gerado a partir da Despesa Fixa: ${fix.name}`,
+        fixedExpenseId: fix.id,
+        competence: occ.competence,
+        isFixedExpense: true,
+        createdAt: now,
+        updatedAt: now,
+        createdBy: user?.uid || '',
+      };
+
+      try {
+        await setDoc(doc(db, 'company_expenses', id), cleanFirestoreData(newExpense));
+        await logAudit(
+          'GENERATE',
+          'FixedExpense',
+          fix.id,
+          `Gerou ocorrência financeira ${expNum} para "${fix.name}" na competência ${occ.competence} (Valor: R$ ${confirmedAmount.toFixed(2)})`
+        );
+        created++;
+      } catch (err) {
+        console.error('Erro ao gerar ocorrência de despesa fixa:', err);
+        skipped++;
+      }
+    }
+
+    return { created, skipped };
+  };
+
   // TECHNICIAN ACTIONS
   const addTechnician = async (data: Omit<Technician, 'id' | 'createdAt' | 'updatedAt'>) => {
     const id = `tech_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
@@ -2133,6 +2361,14 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         updateExpenseCategory,
         deleteExpenseCategory,
         toggleExpenseCategoryStatus,
+        fixedExpenses,
+        addFixedExpense,
+        updateFixedExpense,
+        pauseFixedExpense,
+        resumeFixedExpense,
+        closeFixedExpense,
+        deleteFixedExpense,
+        generateFixedExpenseOccurrences,
         selectedDetailItem,
         setSelectedDetailItem,
         selectedBillingClientId,

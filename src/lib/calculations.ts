@@ -269,3 +269,41 @@ export function consolidateClientFinancials(
     isOverdue,
   };
 }
+
+/**
+ * Calcula a data de vencimento segura para um determinado mês e ano,
+ * tratando os dias 29, 30 e 31 em meses que não possuem esses dias
+ * (utilizando o último dia do mês sem gerar datas inválidas).
+ */
+export function getSafeDueDate(year: number, monthIndex: number, targetDay: number): string {
+  // monthIndex: 0-11
+  const lastDayOfMonth = new Date(year, monthIndex + 1, 0).getDate();
+  const safeDay = Math.min(Math.max(1, targetDay || 1), lastDayOfMonth);
+  const mm = String(monthIndex + 1).padStart(2, '0');
+  const dd = String(safeDay).padStart(2, '0');
+  return `${year}-${mm}-${dd}`;
+}
+
+/**
+ * Retorna o rótulo legível em português da competência (ex: "2026-11" -> "Novembro / 2026")
+ */
+export function getCompetenceLabel(competence: string): string {
+  if (!competence) return '';
+  const parts = competence.split('-');
+  if (parts.length >= 2) {
+    const year = parts[0];
+    const month = parseInt(parts[1], 10);
+    const monthNames = [
+      'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
+      'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
+    ];
+    if (month >= 1 && month <= 12) {
+      if (parts.length === 3 && parts[2]) {
+        return `${monthNames[month - 1]} / ${year} (${parts[2]})`;
+      }
+      return `${monthNames[month - 1]} / ${year}`;
+    }
+  }
+  return competence;
+}
+

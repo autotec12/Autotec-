@@ -255,6 +255,27 @@
         "updatedAt": { "type": "string" }
       },
       "required": ["name", "active"]
+    },
+    "FixedExpense": {
+      "title": "FixedExpense",
+      "description": "Despesas fixas e custos recorrentes da empresa",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "maxLength": 150 },
+        "supplier": { "type": "string", "maxLength": 150 },
+        "category": { "type": "string", "maxLength": 100 },
+        "startDate": { "type": "string", "maxLength": 20 },
+        "recurrence": { "type": "string", "enum": ["semanal", "quinzenal", "mensal", "bimestral", "trimestral", "semestral", "anual"] },
+        "dueDay": { "type": "number" },
+        "valueType": { "type": "string", "enum": ["fixo", "variavel"] },
+        "amount": { "type": "number" },
+        "notes": { "type": "string", "maxLength": 1000 },
+        "status": { "type": "string", "enum": ["ativa", "pausada", "encerrada"] },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "createdBy": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["name", "supplier", "category", "startDate", "recurrence", "dueDay", "valueType", "status"]
     }
   },
   "firestore": {
@@ -301,6 +322,10 @@
     "/expense_categories/{categoryId}": {
       "schema": { "$ref": "ExpenseCategoryItem" },
       "description": "Itens customizados de compras e despesas da empresa"
+    },
+    "/fixed_expenses/{fixedExpenseId}": {
+      "schema": { "$ref": "FixedExpense" },
+      "description": "Modelos de despesas fixas e custos recorrentes da empresa"
     },
     "/company_expenses/{expenseId}": {
       "schema": { "$ref": "CompanyExpense" },

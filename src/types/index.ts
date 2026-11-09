@@ -353,6 +353,7 @@ export interface CompanyExpense {
   expenseNumber: string; // ex: DESP-202611-0001
   voucherNumber: string; // ex: COMP-202611-0001 (Comprovante de Despesa)
   date: string; // YYYY-MM-DD
+  dueDate?: string; // Data de vencimento YYYY-MM-DD
   paymentDate?: string;
   supplier: string; // Fornecedor ou estabelecimento
   operationDescription?: string;
@@ -365,10 +366,74 @@ export interface CompanyExpense {
   paymentMethod: 'dinheiro' | 'pix' | 'cartao_credito' | 'cartao_debito' | 'boleto' | 'transferencia';
   status: 'pago' | 'pendente' | 'parcial';
   notes?: string;
+  accountOrOrigin?: string; // Conta bancária ou origem do dinheiro
+  fixedExpenseId?: string; // Vínculo com a despesa fixa de origem
+  competence?: string; // Competência da despesa fixa (ex: '2026-11')
+  isFixedExpense?: boolean; // Flag de identificação de despesa fixa gerada
   createdAt: string;
   updatedAt: string;
   createdBy?: string;
 }
+
+// ==========================================
+// DESPESAS FIXAS E RECORRENTES DA EMPRESA
+// ==========================================
+export type FixedExpenseRecurrence =
+  | 'semanal'
+  | 'quinzenal'
+  | 'mensal'
+  | 'bimestral'
+  | 'trimestral'
+  | 'semestral'
+  | 'anual';
+
+export type FixedExpenseValueType = 'fixo' | 'variavel';
+
+export type FixedExpenseStatus = 'ativa' | 'pausada' | 'encerrada';
+
+export const DEFAULT_FIXED_EXPENSE_CATEGORIES = [
+  'Aluguel',
+  'Energia elétrica',
+  'Água',
+  'Internet',
+  'Telefone',
+  'Sistemas e softwares',
+  'Contabilidade',
+  'Seguros',
+  'Outros gastos recorrentes',
+] as const;
+
+export interface FixedExpense {
+  id: string;
+  name: string; // Nome ou descrição da despesa (ex: Aluguel da Sede, Energia Elétrica)
+  supplier: string; // Fornecedor ou beneficiário
+  category: string; // Categoria (ex: Aluguel, Energia elétrica, Internet, etc.)
+  startDate: string; // Data de início da recorrência (YYYY-MM-DD)
+  recurrence: FixedExpenseRecurrence; // semanal, quinzenal, mensal, etc.
+  dueDay: number; // Dia de vencimento (1 a 31)
+  valueType: FixedExpenseValueType; // 'fixo' | 'variavel'
+  amount?: number; // Valor de referência habitual (quando aplicável para 'fixo')
+  notes?: string;
+  status: FixedExpenseStatus; // 'ativa' | 'pausada' | 'encerrada'
+  createdAt: string;
+  updatedAt: string;
+  createdBy?: string;
+}
+
+export interface FixedExpenseOccurrenceCandidate {
+  fixedExpenseId: string;
+  fixedExpenseName: string;
+  supplier: string;
+  category: string;
+  competence: string; // ex: '2026-11'
+  competenceLabel: string; // ex: 'Novembro / 2026'
+  dueDate: string; // YYYY-MM-DD (com ajuste de segurança para dia 29, 30 ou 31 em meses curtos)
+  valueType: FixedExpenseValueType;
+  defaultAmount: number;
+  isAlreadyGenerated: boolean;
+  existingExpenseId?: string;
+}
+
 
 // ==========================================
 // GESTÃO GERAL DA EMPRESA (Visão Consolidada)

@@ -223,6 +223,22 @@ export const CompanyExpenseModal: React.FC<CompanyExpenseModalProps> = ({
             </button>
           </div>
 
+          {expenseToEdit?.isFixedExpense && (
+            <div className="bg-indigo-50 text-indigo-900 px-5 py-2.5 text-xs flex items-center justify-between border-b border-indigo-200">
+              <div className="flex items-center gap-2">
+                <span className="font-extrabold uppercase px-2 py-0.5 rounded-md bg-indigo-200/70 text-indigo-800 text-2xs">
+                  Origem: Despesa Fixa
+                </span>
+                <span>
+                  Competência vinculada: <strong>{expenseToEdit.competence}</strong>
+                </span>
+              </div>
+              <span className="text-2xs text-indigo-600 font-medium hidden sm:inline">
+                Lançamento gerado a partir de modelo de recorrência
+              </span>
+            </div>
+          )}
+
           {errorMsg && (
             <div className="bg-rose-50 text-rose-800 px-5 py-3 text-xs flex items-center gap-2 border-b border-rose-200">
               <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
