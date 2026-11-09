@@ -91,6 +91,19 @@ export interface Charge {
   createdBy?: string;
 }
 
+export interface ConsolidatedPaymentItem {
+  chargeId: string;
+  vehicleId: string;
+  vehiclePlate: string;
+  vehicleModel: string;
+  referenceMonth: string;
+  originalAmount: number;
+  previousPaidAmount: number;
+  paidInThisOperation: number;
+  remainingAfterOperation: number;
+  statusAfterOperation: ChargeStatus;
+}
+
 export interface Payment {
   id: string;
   chargeId: string;
@@ -107,6 +120,8 @@ export interface Payment {
   remainingAfterPayment: number;
   notes?: string;
   companySnapshot?: Partial<CompanySettings>;
+  isConsolidated?: boolean;
+  consolidatedItems?: ConsolidatedPaymentItem[];
   createdAt: string;
 }
 

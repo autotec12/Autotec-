@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Vehicle, VehicleType, VehicleStatus } from '../../types';
 import { useData } from '../../context/DataContext';
+import { ClientSearchSelect } from '../common/ClientSearchSelect';
 import { Car, X, Check, AlertCircle, Radio } from 'lucide-react';
 
 interface VehicleModalProps {
@@ -18,7 +19,8 @@ export const VehicleModal: React.FC<VehicleModalProps> = ({
 }) => {
   const { clients, plans, addVehicle, updateVehicle } = useData();
 
-  const [clientId, setClientId] = useState(vehicle?.clientId || preselectedClientId || (clients[0]?.id || ''));
+  const activeClients = clients.filter((c) => c.status !== 'inativo');
+  const [clientId, setClientId] = useState(vehicle?.clientId || preselectedClientId || '');
   const [vehicleType, setVehicleType] = useState<VehicleType>(vehicle?.vehicleType || 'carro');
   const [planId, setPlanId] = useState<string>(vehicle?.planId || '');
   const [brand, setBrand] = useState(vehicle?.brand || '');
@@ -157,22 +159,11 @@ export const VehicleModal: React.FC<VehicleModalProps> = ({
             <label className="block text-xs font-bold text-[#30334F] mb-1.5">
               Cliente Responsável Titular *
             </label>
-            <select
-              value={clientId}
-              onChange={(e) => setClientId(e.target.value)}
-              required
-              className="w-full bg-[#F8F9FA] border border-[#DCE0D9] rounded-xl px-3.5 py-2.5 text-sm text-[#1E2235] focus:outline-hidden focus:border-[#30334F] focus:bg-white"
-            >
-              {clients.length === 0 ? (
-                <option value="">Nenhum cliente cadastrado ainda</option>
-              ) : (
-                clients.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name} {c.document ? `(${c.document})` : ''}
-                  </option>
-                ))
-              )}
-            </select>
+            <ClientSearchSelect
+              clients={activeClients}
+              selectedClientId={clientId}
+              onSelect={(id) => setClientId(id)}
+            />
           </div>
 
           {/* Type & Status */}

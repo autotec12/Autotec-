@@ -9,6 +9,7 @@ import {
   query,
   orderBy,
   limit,
+  runTransaction,
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType, cleanFirestoreData } from '../lib/firebase';
 import {
@@ -16,6 +17,7 @@ import {
   Vehicle,
   Charge,
   Payment,
+  ConsolidatedPaymentItem,
   CompanySettings,
   AuditLog,
   PaymentMethod,
@@ -86,6 +88,14 @@ interface DataContextType {
     notes?: string;
     balanceHandling?: BalanceHandling;
     balanceScheduledDate?: string;
+  }) => Promise<Payment>;
+  recordConsolidatedPayment: (params: {
+    clientId: string;
+    clientName: string;
+    items: { charge: Charge; amountToPay: number }[];
+    paymentDate: string;
+    paymentMethod: PaymentMethod;
+    notes?: string;
   }) => Promise<Payment>;
   
   // Technical Services actions
@@ -930,6 +940,142 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   // RECORD PAYMENT (With Strict Partial Handling)
+  const recordConsolidatedPayment = async ({
+    clientId,
+    clientName,
+    items,
+    paymentDate,
+    paymentMethod,
+    notes = '',
+  }: {
+    clientId: string;
+    clientName: string;
+    items: { charge: Charge; amountToPay: number }[];
+    paymentDate: string;
+    paymentMethod: PaymentMethod;
+    notes?: string;
+  }): Promise<Payment> => {
+    if (!items || items.length === 0) {
+      throw new Error('Selecione ao menos uma mensalidade para registrar o recebimento.');
+    }
+
+    const totalAmount = items.reduce((acc, it) => acc + (Number(it.amountToPay) || 0), 0);
+    if (totalAmount <= 0) {
+      throw new Error('O valor total do recebimento deve ser maior que zero.');
+    }
+
+    const now = new Date().toISOString();
+    const paymentId = `pay_cons_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const receiptNumber = `REC-CONS-${Date.now().toString().slice(-6)}`;
+
+    const consolidatedItems: ConsolidatedPaymentItem[] = [];
+    let totalRemainingAfter = 0;
+
+    await runTransaction(db, async (transaction) => {
+      // 1. Read all charges inside transaction to guarantee atomic state & prevent duplicate payments
+      const chargeDocs = await Promise.all(
+        items.map((it) => transaction.get(doc(db, 'charges', it.charge.id)))
+      );
+
+      for (let i = 0; i < items.length; i++) {
+        const snap = chargeDocs[i];
+        const { charge, amountToPay } = items[i];
+        if (!snap.exists()) {
+          throw new Error(`Cobrança ${charge.vehiclePlate} (${charge.referenceMonth}) não encontrada.`);
+        }
+        const currentData = snap.data() as Charge;
+        const currentRemaining = Math.max(0, Number(currentData.remainingBalance ?? (currentData.totalAmount - (currentData.paidAmount || 0))));
+
+        if (currentData.status === 'pago' || currentRemaining <= 0.009) {
+          throw new Error(`A mensalidade do veículo ${currentData.vehiclePlate} (${currentData.referenceMonth}) já está quitada.`);
+        }
+        if (amountToPay > currentRemaining + 0.01) {
+          throw new Error(`O valor informado para ${currentData.vehiclePlate} ultrapassa o saldo pendente.`);
+        }
+
+        const newPaid = Math.round(((currentData.paidAmount || 0) + amountToPay) * 100) / 100;
+        const newRemaining = Math.max(0, Math.round((currentData.totalAmount - newPaid) * 100) / 100);
+        const newStatus = newRemaining <= 0.009 ? 'pago' : 'parcial';
+
+        totalRemainingAfter += newRemaining;
+
+        consolidatedItems.push({
+          chargeId: currentData.id,
+          vehicleId: currentData.vehicleId,
+          vehiclePlate: currentData.vehiclePlate,
+          vehicleModel: currentData.vehicleModel || '',
+          referenceMonth: currentData.referenceMonth,
+          originalAmount: currentData.totalAmount,
+          previousPaidAmount: currentData.paidAmount || 0,
+          paidInThisOperation: Math.round(amountToPay * 100) / 100,
+          remainingAfterOperation: newRemaining,
+          statusAfterOperation: newStatus,
+        });
+
+        transaction.update(doc(db, 'charges', currentData.id), cleanFirestoreData({
+          paidAmount: newPaid,
+          remainingBalance: newRemaining,
+          status: newStatus,
+          paymentDate,
+          updatedAt: now,
+        }));
+      }
+
+      const consolidatedPayment: Payment = {
+        id: paymentId,
+        chargeId: items[0].charge.id,
+        clientId,
+        clientName,
+        vehicleId: items[0].charge.vehicleId,
+        vehiclePlate: items.map((it) => it.charge.vehiclePlate).join(', '),
+        amount: Math.round(totalAmount * 100) / 100,
+        paymentDate,
+        paymentMethod,
+        operatorId: user?.uid || 'admin',
+        operatorName: user?.displayName || user?.email || 'Administrador',
+        receiptNumber,
+        remainingAfterPayment: Math.round(totalRemainingAfter * 100) / 100,
+        notes: notes.trim() || `Recebimento consolidado de ${items.length} mensalidade(s)`,
+        companySnapshot: companySettings,
+        isConsolidated: true,
+        consolidatedItems,
+        createdAt: now,
+      };
+
+      transaction.set(doc(db, 'payments', paymentId), cleanFirestoreData(consolidatedPayment));
+    });
+
+    await logAudit(
+      'PAYMENT',
+      'ConsolidatedPayment',
+      paymentId,
+      `Recebimento consolidado ${receiptNumber} para ${clientName}: R$ ${totalAmount.toFixed(2)} (${items.length} veículos/mensalidades)`
+    );
+
+    const createdPayment: Payment = {
+      id: paymentId,
+      chargeId: items[0].charge.id,
+      clientId,
+      clientName,
+      vehicleId: items[0].charge.vehicleId,
+      vehiclePlate: items.map((it) => it.charge.vehiclePlate).join(', '),
+      amount: Math.round(totalAmount * 100) / 100,
+      paymentDate,
+      paymentMethod,
+      operatorId: user?.uid || 'admin',
+      operatorName: user?.displayName || user?.email || 'Administrador',
+      receiptNumber,
+      remainingAfterPayment: Math.round(totalRemainingAfter * 100) / 100,
+      notes: notes.trim() || `Recebimento consolidado de ${items.length} mensalidade(s)`,
+      companySnapshot: companySettings,
+      isConsolidated: true,
+      consolidatedItems,
+      createdAt: now,
+    };
+
+    return createdPayment;
+  };
+
   const recordPayment = async ({
     charge,
     amount,
@@ -2335,6 +2481,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         deleteCharge,
         generateMonthlyCharges,
         recordPayment,
+        recordConsolidatedPayment,
         technicalServices,
         addTechnicalService,
         updateTechnicalService,

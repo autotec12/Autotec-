@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Charge, Payment, Client, Vehicle } from '../../types';
 import { useData } from '../../context/DataContext';
 import { PaymentModal } from './PaymentModal';
+import { ConsolidatedPaymentModal } from './ConsolidatedPaymentModal';
 import { ReceiptModal } from '../receipts/ReceiptModal';
 import { WhatsAppModal } from '../whatsapp/WhatsAppModal';
 import { NewChargeModal } from './NewChargeModal';
@@ -62,6 +63,7 @@ export const BillingView: React.FC<BillingViewProps> = ({ onNavigate }) => {
   } | null>(null);
   const [chargeForWhatsApp, setChargeForWhatsApp] = useState<Charge | null>(null);
   const [isNewChargeModalOpen, setIsNewChargeModalOpen] = useState(false);
+  const [isConsolidatedModalOpen, setIsConsolidatedModalOpen] = useState(false);
   const [chargeToDelete, setChargeToDelete] = useState<Charge | null>(null);
 
   const [isGenerating, setIsGenerating] = useState(false);
@@ -177,6 +179,13 @@ export const BillingView: React.FC<BillingViewProps> = ({ onNavigate }) => {
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
+          <button
+            onClick={() => setIsConsolidatedModalOpen(true)}
+            className="px-3.5 py-2 bg-[#30334F] hover:bg-[#222538] text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-xs cursor-pointer"
+          >
+            <CheckCircle2 className="w-4 h-4 text-[#F28C1B]" />
+            Recebimento Consolidado (Plano)
+          </button>
           <button
             onClick={() => setIsNewChargeModalOpen(true)}
             className="px-3.5 py-2 bg-white hover:bg-[#F3F4F2] text-[#30334F] rounded-xl text-xs font-bold border border-[#E2E4E0] flex items-center gap-1.5 transition shadow-xs"
@@ -711,6 +720,19 @@ export const BillingView: React.FC<BillingViewProps> = ({ onNavigate }) => {
           charge={chargeToDelete}
           onClose={() => setChargeToDelete(null)}
           onDeleted={() => setChargeToDelete(null)}
+        />
+      )}
+
+      {/* MODAL: Consolidated Plan Payment */}
+      {isConsolidatedModalOpen && (
+        <ConsolidatedPaymentModal
+          initialClientId={selectedBillingClientId}
+          initialReferenceMonth={selectedMonth !== 'todos' ? selectedMonth : undefined}
+          onClose={() => setIsConsolidatedModalOpen(false)}
+          onSuccess={(payment, firstCharge) => {
+            setIsConsolidatedModalOpen(false);
+            setReceiptModalData({ payment, charge: firstCharge });
+          }}
         />
       )}
     </div>

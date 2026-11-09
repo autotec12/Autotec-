@@ -48,6 +48,10 @@ export function generateReceiptSvg(
     ...(payment.companySnapshot || {}),
   } as CompanySettings;
 
+  if (payment.isConsolidated && payment.consolidatedItems && payment.consolidatedItems.length > 0) {
+    return generateConsolidatedReceiptSvg(payment, client, effectiveCompany);
+  }
+
   const companyName = effectiveCompany.companyName || 'AUTOTEC RASTREAMENTO VEICULAR';
   const cnpj = effectiveCompany.cnpj;
   const phone = effectiveCompany.phone;
@@ -1274,4 +1278,100 @@ export async function shareReceipt(
   }
 
   return false;
+}
+
+function generateConsolidatedReceiptSvg(
+  payment: Payment,
+  client?: Client,
+  company?: CompanySettings
+): string {
+  const companyName = company?.companyName || 'AUTOTEC RASTREAMENTO VEICULAR';
+  const cnpj = company?.cnpj || '38.450.812/0001-94';
+  const phone = company?.phone || '(11) 98765-4321';
+  const address = company?.address || 'Atendimento em todo o território nacional';
+  const city = company?.city || 'São Paulo';
+  const state = company?.state || 'SP';
+  const email = company?.email || 'contato@autotec.com.br';
+  const logoDataUri = company?.logoSvg || AUTOTEC_LOGO_ORIGINAL_DATA_URI;
+
+  const items = payment.consolidatedItems || [];
+  const totalOriginal = items.reduce((acc, it) => acc + (Number(it.originalAmount) || 0), 0);
+  const totalReceived = Number(payment.amount || 0);
+  const totalRemaining = Number(payment.remainingAfterPayment || 0);
+
+  const rowHeight = 36;
+  const tableHeight = 44 + Math.max(items.length, 1) * rowHeight;
+  const dynamicHeight = 680 + tableHeight;
+
+  const startY = 350;
+  let rowsSvg = '';
+  items.forEach((item, index) => {
+    const y = startY + 44 + index * rowHeight;
+    const bgFill = index % 2 === 0 ? '#FFFFFF' : '#F8FAFC';
+    rowsSvg += `
+      <rect x="35" y="${y - 20}" width="730" height="${rowHeight}" fill="${bgFill}" />
+      <line x1="35" y1="${y + rowHeight - 20}" x2="765" y2="${y + rowHeight - 20}" stroke="#E2E8F0" stroke-width="1" />
+      <text x="50" y="${y + 2}" font-size="11" font-family="monospace" font-weight="800" fill="#30334F">${escapeXml(item.vehiclePlate)}</text>
+      <text x="145" y="${y + 2}" font-size="10" fill="#475569">${escapeXml((item.vehicleModel || '').slice(0, 22))}</text>
+      <text x="330" y="${y + 2}" font-size="10" font-weight="700" fill="#334155">${escapeXml(item.referenceMonth)}</text>
+      <text x="480" y="${y + 2}" font-size="11" fill="#64748B" text-anchor="end">${escapeXml(formatCurrency(item.originalAmount))}</text>
+      <text x="615" y="${y + 2}" font-size="11" font-weight="800" fill="#047857" text-anchor="end">${escapeXml(formatCurrency(item.paidInThisOperation))}</text>
+      <text x="745" y="${y + 2}" font-size="11" font-weight="700" fill="${item.remainingAfterOperation > 0 ? '#B45309' : '#64748B'}" text-anchor="end">${escapeXml(formatCurrency(item.remainingAfterOperation))}</text>
+    `;
+  });
+
+  const totalsY = startY + tableHeight + 20;
+  const footerY = totalsY + 150;
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 ${dynamicHeight}" width="100%" height="auto" style="background-color: #FFFFFF; font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: block;">
+  <rect x="15" y="15" width="770" height="${dynamicHeight - 30}" rx="16" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="2" />
+  <rect x="15" y="15" width="770" height="8" rx="4" fill="#30334F" />
+  <rect x="15" y="23" width="770" height="4" fill="#F28C1B" />
+
+  <rect x="35" y="40" width="730" height="120" rx="12" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="1" />
+  <image href="${logoDataUri}" x="50" y="50" width="190" height="95" preserveAspectRatio="xMidYMid meet" />
+  <text x="260" y="68" font-size="17" font-weight="900" fill="#30334F">${escapeXml(companyName)}</text>
+  <text x="260" y="86" font-size="11" font-weight="600" fill="#475569">CNPJ: ${escapeXml(cnpj)}</text>
+  <text x="260" y="102" font-size="11" fill="#475569">${escapeXml(address)} • ${escapeXml(city)}/${escapeXml(state)}</text>
+  <text x="260" y="118" font-size="11" fill="#475569">Tel/WhatsApp: ${escapeXml(phone)} • ${escapeXml(email)}</text>
+
+  <rect x="35" y="175" width="730" height="46" rx="10" fill="#30334F" />
+  <text x="50" y="203" font-size="13" font-weight="900" fill="#FFFFFF" letter-spacing="0.6">RECIBO DE RECEBIMENTO CONSOLIDADO DE PLANO</text>
+  <rect x="580" y="184" width="170" height="28" rx="6" fill="#F28C1B" />
+  <text x="665" y="203" font-size="11" font-weight="900" fill="#FFFFFF" text-anchor="middle" font-family="monospace">${escapeXml(payment.receiptNumber)}</text>
+
+  <rect x="35" y="235" width="730" height="95" rx="10" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="1" />
+  <text x="55" y="258" font-size="10" font-weight="800" fill="#30334F">CLIENTE / TITULAR DO PLANO:</text>
+  <text x="55" y="278" font-size="14" font-weight="800" fill="#1E293B">${escapeXml(payment.clientName)}</text>
+  <text x="55" y="298" font-size="11" fill="#475569">CPF/CNPJ: <tspan font-weight="700" fill="#1E293B">${escapeXml(client?.document || 'Não informado')}</tspan></text>
+  <text x="55" y="315" font-size="11" fill="#475569">Veículos incluídos: <tspan font-weight="700" fill="#1E293B">${items.length} veículo(s)</tspan></text>
+
+  <line x1="430" y1="245" x2="430" y2="320" stroke="#CBD5E1" stroke-width="1" stroke-dasharray="3 3" />
+  <text x="450" y="258" font-size="10" font-weight="800" fill="#30334F">DADOS DO RECEBIMENTO:</text>
+  <text x="450" y="280" font-size="11" fill="#475569">Data: <tspan font-weight="800" fill="#047857">${escapeXml(formatDate(payment.paymentDate))}</tspan></text>
+  <text x="450" y="298" font-size="11" fill="#475569">Forma: <tspan font-weight="800" fill="#1E293B">${escapeXml(PAYMENT_METHOD_LABELS[payment.paymentMethod] || payment.paymentMethod)}</tspan></text>
+  <text x="450" y="316" font-size="11" fill="#475569">Situação: <tspan font-weight="800" fill="${totalRemaining > 0.009 ? '#B45309' : '#047857'}">${totalRemaining > 0.009 ? 'RECEBIMENTO PARCIAL' : 'QUITADO INTEGRALMENTE'}</tspan></text>
+
+  <rect x="35" y="${startY}" width="730" height="38" rx="8" fill="#30334F" />
+  <text x="50" y="${startY + 24}" font-size="10" font-weight="800" fill="#FFFFFF">PLACA</text>
+  <text x="145" y="${startY + 24}" font-size="10" font-weight="800" fill="#FFFFFF">VEÍCULO</text>
+  <text x="330" y="${startY + 24}" font-size="10" font-weight="800" fill="#FFFFFF">COMPETÊNCIA</text>
+  <text x="480" y="${startY + 24}" font-size="10" font-weight="800" fill="#FFFFFF" text-anchor="end">VALOR ORIGINAL</text>
+  <text x="615" y="${startY + 24}" font-size="10" font-weight="800" fill="#FFFFFF" text-anchor="end">RECEBIDO</text>
+  <text x="745" y="${startY + 24}" font-size="10" font-weight="800" fill="#FFFFFF" text-anchor="end">RESTANTE</text>
+
+  ${rowsSvg}
+
+  <rect x="35" y="${totalsY}" width="730" height="105" rx="12" fill="#30334F" />
+  <text x="60" y="${totalsY + 32}" font-size="11" font-weight="700" fill="#CBD5E1">VALOR ORIGINAL DO PLANO: <tspan fill="#FFFFFF" font-weight="800">${escapeXml(formatCurrency(totalOriginal))}</tspan></text>
+  <text x="60" y="${totalsY + 58}" font-size="11" font-weight="700" fill="#CBD5E1">SALDO RESTANTE: <tspan fill="${totalRemaining > 0.009 ? '#FBBF24' : '#34D399'}" font-weight="800">${escapeXml(formatCurrency(totalRemaining))}</tspan></text>
+  <text x="60" y="${totalsY + 84}" font-size="10" fill="#94A3B8">Controle individual por veículo preservado</text>
+
+  <text x="735" y="${totalsY + 35}" font-size="11" font-weight="800" fill="#F28C1B" text-anchor="end">TOTAL EFETIVAMENTE RECEBIDO</text>
+  <text x="735" y="${totalsY + 75}" font-size="28" font-weight="900" fill="#34D399" text-anchor="end">${escapeXml(formatCurrency(totalReceived))}</text>
+
+  <text x="400" y="${footerY}" font-size="9" fill="#94A3B8" text-anchor="middle">
+    AUTOTEC Rastreamento Veicular • Recibo consolidado emitido em ${escapeXml(formatDateTime(payment.createdAt))}
+  </text>
+</svg>`;
 }

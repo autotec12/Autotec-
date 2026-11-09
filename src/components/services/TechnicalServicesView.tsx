@@ -4,6 +4,7 @@ import { TechnicalServiceOrder } from '../../types';
 import { formatCurrency, formatDate } from '../../lib/calculations';
 import { TechnicalServiceModal } from './TechnicalServiceModal';
 import { TechnicalServiceReceiptModal } from './TechnicalServiceReceiptModal';
+import { ClientServicePaymentModal } from './ClientServicePaymentModal';
 import { TechniciansModal } from './TechniciansModal';
 import { ServiceTypesModal } from './ServiceTypesModal';
 import { TechnicianPaymentModal } from '../technicians/TechnicianPaymentModal';
@@ -48,6 +49,7 @@ export const TechnicalServicesView: React.FC = () => {
   const [preselectedServiceIdsForPayment, setPreselectedServiceIdsForPayment] = useState<string[]>([]);
   const [viewingTechnicianReceipt, setViewingTechnicianReceipt] = useState<TechnicianPayment | null>(null);
   const [orderToEdit, setOrderToEdit] = useState<TechnicalServiceOrder | null>(null);
+  const [clientPaymentOrder, setClientPaymentOrder] = useState<TechnicalServiceOrder | null>(null);
   const [viewingReceiptOrder, setViewingReceiptOrder] = useState<TechnicalServiceOrder | null>(() => {
     if (selectedDetailItem && selectedDetailItem.type === 'servico_tecnico') {
       return technicalServices.find((s) => s.id === selectedDetailItem.id) || null;
@@ -448,6 +450,15 @@ export const TechnicalServicesView: React.FC = () => {
                       {/* Ações */}
                       <td className="py-3.5 px-4 text-right">
                         <div className="flex items-center justify-end gap-1">
+                          {order.remainingBalance > 0.009 && (
+                            <button
+                              onClick={() => setClientPaymentOrder(order)}
+                              className="p-1.5 text-indigo-700 hover:text-indigo-900 hover:bg-indigo-50 rounded-lg transition cursor-pointer"
+                              title="Registrar Recebimento do Cliente"
+                            >
+                              <CheckCircle2 className="w-4 h-4" />
+                            </button>
+                          )}
                           {techRemainingDue > 0.009 && (
                             <button
                               onClick={() => {
@@ -564,6 +575,17 @@ export const TechnicalServicesView: React.FC = () => {
         <TechnicianReceiptModal
           payment={viewingTechnicianReceipt}
           onClose={() => setViewingTechnicianReceipt(null)}
+        />
+      )}
+
+      {clientPaymentOrder && (
+        <ClientServicePaymentModal
+          order={clientPaymentOrder}
+          onClose={() => setClientPaymentOrder(null)}
+          onSuccess={(updatedOrder) => {
+            setClientPaymentOrder(null);
+            setViewingReceiptOrder(updatedOrder);
+          }}
         />
       )}
     </div>

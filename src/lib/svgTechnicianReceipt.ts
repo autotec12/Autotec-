@@ -66,9 +66,11 @@ export function generateTechnicianPaymentReceiptSvg(
   const rowCount = Math.max(items.length, 1);
   const rowHeight = 36;
   const tableHeight = 44 + (rowCount * rowHeight);
+  const hasNotes = Boolean(payment.notes && payment.notes.trim());
+  const notesHeight = hasNotes ? 58 : 0;
 
   // Dynamic height
-  const dynamicSvgHeight = 780 + tableHeight;
+  const dynamicSvgHeight = 780 + tableHeight + notesHeight;
 
   let rowsSvg = '';
   let startY = 370;
@@ -77,9 +79,6 @@ export function generateTechnicianPaymentReceiptSvg(
     const y = startY + 44 + (index * rowHeight);
     const isEven = index % 2 === 0;
     const bgFill = isEven ? '#FFFFFF' : '#F8FAFC';
-    const statusText = item.statusAfterThisPayment === 'pago' ? 'Quitado' : 'Parcial';
-    const statusBg = item.statusAfterThisPayment === 'pago' ? '#ECFDF5' : '#FFFBEB';
-    const statusColor = item.statusAfterThisPayment === 'pago' ? '#047857' : '#B45309';
 
     rowsSvg += `
       <rect x="35" y="${y - 20}" width="730" height="${rowHeight}" fill="${bgFill}" />
@@ -88,20 +87,17 @@ export function generateTechnicianPaymentReceiptSvg(
       <text x="50" y="${y + 2}" font-size="11" font-family="monospace" font-weight="700" fill="#30334F">${escapeXml(item.orderNumber)}</text>
       <text x="140" y="${y + 2}" font-size="10" fill="#475569">${escapeXml(formatDate(item.executionDate || ''))}</text>
       
-      <text x="215" y="${y - 4}" font-size="11" font-weight="700" fill="#1E293B">${escapeXml(item.clientName.slice(0, 18))}</text>
-      <text x="215" y="${y + 9}" font-size="9" fill="#64748B">${escapeXml(item.vehiclePlate)} • ${escapeXml((item.vehicleModel || '').slice(0, 14))}</text>
+      <text x="220" y="${y - 4}" font-size="11" font-weight="700" fill="#1E293B">${escapeXml(item.clientName.slice(0, 22))}</text>
+      <text x="220" y="${y + 9}" font-size="9" fill="#64748B">${escapeXml(item.vehiclePlate)} • ${escapeXml((item.vehicleModel || '').slice(0, 18))}</text>
       
-      <text x="390" y="${y + 2}" font-size="10" font-weight="600" fill="#334155">${escapeXml((item.serviceCategory || '').slice(0, 22))}</text>
+      <text x="430" y="${y + 2}" font-size="10" font-weight="600" fill="#334155">${escapeXml((item.serviceCategory || '').slice(0, 28))}</text>
       
-      <text x="560" y="${y + 2}" font-size="11" font-weight="600" fill="#64748B" text-anchor="end">${escapeXml(formatCurrency(item.technicianFee))}</text>
-      <text x="660" y="${y + 2}" font-size="11" font-weight="800" fill="#047857" text-anchor="end">${escapeXml(formatCurrency(item.paidInThisPayment))}</text>
-      
-      <rect x="685" y="${y - 10}" width="65" height="18" rx="9" fill="${statusBg}" />
-      <text x="717" y="${y + 3}" font-size="9" font-weight="800" fill="${statusColor}" text-anchor="middle">${statusText}</text>
+      <text x="745" y="${y + 2}" font-size="12" font-weight="800" fill="#047857" text-anchor="end">${escapeXml(formatCurrency(item.paidInThisPayment))}</text>
     `;
   });
 
-  const totalsY = startY + tableHeight + 20;
+  const notesY = startY + tableHeight + 12;
+  const totalsY = notesY + notesHeight + 8;
   const declarationY = totalsY + 115;
   const signY = declarationY + 95;
   const footerY = signY + 90;
@@ -163,14 +159,19 @@ export function generateTechnicianPaymentReceiptSvg(
   <rect x="35" y="${startY}" width="730" height="38" rx="8" fill="#30334F" />
   <text x="50" y="${startY + 24}" font-size="10" font-weight="800" fill="#FFFFFF">ORDEM</text>
   <text x="140" y="${startY + 24}" font-size="10" font-weight="800" fill="#FFFFFF">DATA</text>
-  <text x="215" y="${startY + 24}" font-size="10" font-weight="800" fill="#FFFFFF">CLIENTE / VEÍCULO</text>
-  <text x="390" y="${startY + 24}" font-size="10" font-weight="800" fill="#FFFFFF">SERVIÇO</text>
-  <text x="560" y="${startY + 24}" font-size="10" font-weight="800" fill="#FFFFFF" text-anchor="end">VALOR DEVIDO</text>
-  <text x="660" y="${startY + 24}" font-size="10" font-weight="800" fill="#FFFFFF" text-anchor="end">PAGO NESTA BAIXA</text>
-  <text x="717" y="${startY + 24}" font-size="10" font-weight="800" fill="#FFFFFF" text-anchor="middle">SITUAÇÃO</text>
+  <text x="220" y="${startY + 24}" font-size="10" font-weight="800" fill="#FFFFFF">CLIENTE / VEÍCULO</text>
+  <text x="430" y="${startY + 24}" font-size="10" font-weight="800" fill="#FFFFFF">SERVIÇO</text>
+  <text x="745" y="${startY + 24}" font-size="10" font-weight="800" fill="#FFFFFF" text-anchor="end">VALOR PAGO</text>
 
   <!-- TABLE ROWS -->
   ${rowsSvg}
+
+  ${hasNotes ? `
+  <!-- OBSERVATIONS -->
+  <rect x="35" y="${notesY}" width="730" height="46" rx="8" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="1" />
+  <text x="50" y="${notesY + 18}" font-size="9" font-weight="800" fill="#30334F">OBSERVAÇÕES:</text>
+  <text x="50" y="${notesY + 34}" font-size="10" fill="#475569">${escapeXml((payment.notes || '').slice(0, 110))}</text>
+  ` : ''}
 
   <!-- TOTAL SUMMARY CARD -->
   <rect x="35" y="${totalsY}" width="730" height="95" rx="12" fill="url(#totalGrad)" />

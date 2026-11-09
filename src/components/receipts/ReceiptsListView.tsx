@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
 import { useData } from '../../context/DataContext';
-import { Payment, Charge, TechnicalServiceOrder, CompanyExpense } from '../../types';
+import { Payment, Charge, TechnicalServiceOrder, CompanyExpense, TechnicianPayment } from '../../types';
 import { ReceiptModal } from './ReceiptModal';
 import { TechnicalServiceReceiptModal } from '../services/TechnicalServiceReceiptModal';
 import { ExpenseVoucherModal } from '../expenses/ExpenseVoucherModal';
+import { TechnicianReceiptModal } from '../technicians/TechnicianReceiptModal';
 import { formatCurrency, formatDateTime, formatDate } from '../../lib/calculations';
 import {
   FileText,
@@ -12,13 +13,17 @@ import {
   Receipt,
   Wrench,
   ShoppingBag,
+  Users,
+  Calendar,
 } from 'lucide-react';
 
 export const ReceiptsListView: React.FC = () => {
-  const { payments, charges, clients, vehicles, technicalServices, companyExpenses } = useData();
+  const { payments, charges, clients, vehicles, technicalServices, companyExpenses, technicianPayments } = useData();
 
-  const [activeTab, setActiveTab] = useState<'mensalidades' | 'servicos' | 'despesas'>('mensalidades');
+  const [activeTab, setActiveTab] = useState<'mensalidades' | 'servicos' | 'tecnicos' | 'despesas'>('mensalidades');
   const [searchTerm, setSearchTerm] = useState('');
+  const [periodStart, setPeriodStart] = useState('');
+  const [periodEnd, setPeriodEnd] = useState('');
 
   // Selected modals
   const [selectedReceiptData, setSelectedReceiptData] = useState<{
@@ -27,6 +32,7 @@ export const ReceiptsListView: React.FC = () => {
   } | null>(null);
   const [selectedServiceOrder, setSelectedServiceOrder] = useState<TechnicalServiceOrder | null>(null);
   const [selectedExpense, setSelectedExpense] = useState<CompanyExpense | null>(null);
+  const [selectedTechPayment, setSelectedTechPayment] = useState<TechnicianPayment | null>(null);
 
   const chargeMap = new Map<string, Charge>();
   charges.forEach((c) => chargeMap.set(c.id, c));
@@ -58,6 +64,22 @@ export const ReceiptsListView: React.FC = () => {
       e.voucherNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
       e.supplier.toLowerCase().includes(searchTerm.toLowerCase())
     );
+  });
+
+  // Filtered technician payments
+  const filteredTechPayments = technicianPayments.filter((tp) => {
+    const q = searchTerm.toLowerCase();
+    const matchSearch =
+      !q ||
+      (tp.receiptNumber || '').toLowerCase().includes(q) ||
+      (tp.technicianName || '').toLowerCase().includes(q) ||
+      (tp.items || []).some((i) => (i.orderNumber || '').toLowerCase().includes(q));
+
+    const payDate = (tp.paymentDate || tp.createdAt || '').slice(0, 10);
+    const matchStart = !periodStart || payDate >= periodStart;
+    const matchEnd = !periodEnd || payDate <= periodEnd;
+
+    return matchSearch && matchStart && matchEnd;
   });
 
   return (
@@ -101,6 +123,18 @@ export const ReceiptsListView: React.FC = () => {
           </button>
 
           <button
+            onClick={() => setActiveTab('tecnicos')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition cursor-pointer ${
+              activeTab === 'tecnicos'
+                ? 'bg-[#30334F] text-white shadow-2xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+            }`}
+          >
+            <Users className="w-3.5 h-3.5 text-[#F28C1B]" />
+            Pagamentos de Técnicos ({technicianPayments.length})
+          </button>
+
+          <button
             onClick={() => setActiveTab('despesas')}
             className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition cursor-pointer ${
               activeTab === 'despesas'
@@ -114,21 +148,56 @@ export const ReceiptsListView: React.FC = () => {
         </div>
       </div>
 
-      {/* Search */}
-      <div className="bg-white border border-[#E2E4E0] rounded-2xl p-4 shadow-xs flex flex-col sm:flex-row items-center justify-between gap-3">
-        <div className="relative w-full sm:w-96">
+      {/* Search & Period Filter */}
+      <div className="bg-white border border-[#E2E4E0] rounded-2xl p-4 shadow-xs flex flex-col md:flex-row items-center justify-between gap-3">
+        <div className="relative w-full md:w-96">
           <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
           <input
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="Buscar por número do recibo, cliente, fornecedor ou placa..."
+            placeholder="Buscar por número do recibo, cliente, técnico, fornecedor ou placa..."
             className="w-full bg-[#F8F9FA] border border-[#DCE0D9] rounded-xl pl-10 pr-4 py-2 text-xs text-[#1E2235] placeholder-slate-400 focus:outline-hidden focus:border-[#30334F] focus:bg-white transition"
           />
         </div>
+
+        {activeTab === 'tecnicos' && (
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <Calendar className="w-4 h-4 text-[#F28C1B]" />
+            <input
+              type="date"
+              value={periodStart}
+              onChange={(e) => setPeriodStart(e.target.value)}
+              className="bg-[#F8F9FA] border border-[#DCE0D9] rounded-xl px-2.5 py-1.5 text-xs text-[#1E2235]"
+              title="Data inicial"
+            />
+            <span className="text-slate-400">até</span>
+            <input
+              type="date"
+              value={periodEnd}
+              onChange={(e) => setPeriodEnd(e.target.value)}
+              className="bg-[#F8F9FA] border border-[#DCE0D9] rounded-xl px-2.5 py-1.5 text-xs text-[#1E2235]"
+              title="Data final"
+            />
+            {(periodStart || periodEnd) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setPeriodStart('');
+                  setPeriodEnd('');
+                }}
+                className="text-2xs font-bold text-slate-500 hover:text-slate-800 underline cursor-pointer"
+              >
+                Limpar
+              </button>
+            )}
+          </div>
+        )}
+
         <div className="text-xs text-slate-500 font-medium">
           {activeTab === 'mensalidades' && `${filteredPayments.length} comprovantes de mensalidade`}
           {activeTab === 'servicos' && `${filteredServices.length} ordens de serviço`}
+          {activeTab === 'tecnicos' && `${filteredTechPayments.length} recibos de técnicos`}
           {activeTab === 'despesas' && `${filteredExpenses.length} comprovantes de despesa`}
         </div>
       </div>
@@ -388,6 +457,67 @@ export const ReceiptsListView: React.FC = () => {
         </div>
       )}
 
+      {/* TAB 4: Pagamentos de Técnicos */}
+      {activeTab === 'tecnicos' && (
+        <div className="bg-white border border-[#E2E4E0] rounded-2xl overflow-hidden shadow-xs">
+          {filteredTechPayments.length === 0 ? (
+            <div className="p-12 text-center text-xs text-slate-500">
+              Nenhum recibo de pagamento a técnico encontrado.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left">
+                <thead className="bg-[#F8F9FA] text-[#60677D] font-bold border-b border-[#E2E4E0] uppercase tracking-wider text-2xs">
+                  <tr>
+                    <th className="px-4 py-3.5">Nº Recibo</th>
+                    <th className="px-4 py-3.5">Técnico Prestador</th>
+                    <th className="px-4 py-3.5">Data do Pagamento</th>
+                    <th className="px-4 py-3.5">Serviços Incluídos</th>
+                    <th className="px-4 py-3.5">Forma</th>
+                    <th className="px-4 py-3.5">Valor Pago</th>
+                    <th className="px-4 py-3.5 text-right">Ações</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#E2E4E0]">
+                  {filteredTechPayments.map((tp) => (
+                    <tr key={tp.id} className="hover:bg-[#F8F9FA]/70 transition">
+                      <td className="px-4 py-3.5 font-mono font-bold text-[#30334F]">
+                        {tp.receiptNumber || tp.id.slice(-6)}
+                      </td>
+                      <td className="px-4 py-3.5 font-bold text-[#1E2235]">
+                        {tp.technicianName}
+                      </td>
+                      <td className="px-4 py-3.5 text-slate-500">
+                        {formatDate(tp.paymentDate || tp.createdAt)}
+                      </td>
+                      <td className="px-4 py-3.5 text-slate-600">
+                        {tp.items && tp.items.length > 0
+                          ? `${tp.items.length} serviço(s): ${tp.items.map((i) => i.orderNumber).join(', ')}`
+                          : `${tp.serviceIds?.length || 1} serviço(s)`}
+                      </td>
+                      <td className="px-4 py-3.5 uppercase font-semibold text-slate-700 text-2xs">
+                        {tp.paymentMethod}
+                      </td>
+                      <td className="px-4 py-3.5 font-extrabold text-emerald-700">
+                        {formatCurrency(tp.amount)}
+                      </td>
+                      <td className="px-4 py-3.5 text-right">
+                        <button
+                          onClick={() => setSelectedTechPayment(tp)}
+                          className="px-3 py-1.5 bg-[#30334F] hover:bg-[#222538] text-white rounded-xl text-2xs font-bold transition cursor-pointer"
+                        >
+                          Abrir Recibo
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Modal Recibo Mensalidade */}
       {selectedReceiptData && (
         <ReceiptModal
@@ -412,6 +542,14 @@ export const ReceiptsListView: React.FC = () => {
         <ExpenseVoucherModal
           expense={selectedExpense}
           onClose={() => setSelectedExpense(null)}
+        />
+      )}
+
+      {/* Modal Recibo Pagamento Técnico */}
+      {selectedTechPayment && (
+        <TechnicianReceiptModal
+          payment={selectedTechPayment}
+          onClose={() => setSelectedTechPayment(null)}
         />
       )}
     </div>
