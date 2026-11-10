@@ -61,17 +61,17 @@ export const CompanyExpenseModal: React.FC<CompanyExpenseModalProps> = ({
           {
             id: `item_exp_${Date.now()}`,
             category: 'Chips',
-            description: 'Recarga lote de chips M2M',
-            quantity: 10,
-            unitPrice: 12,
-            subtotal: 120,
+            description: '',
+            quantity: 0,
+            unitPrice: 0,
+            subtotal: 0,
           },
         ]
   );
 
   const [discount, setDiscount] = useState<number>(expenseToEdit?.discount || 0);
   const [paidAmount, setPaidAmount] = useState<number>(
-    expenseToEdit?.paidAmount !== undefined ? expenseToEdit.paidAmount : 120
+    expenseToEdit?.paidAmount !== undefined ? expenseToEdit.paidAmount : 0
   );
   const [notes, setNotes] = useState(expenseToEdit?.notes || '');
   const [saving, setSaving] = useState(false);
@@ -92,7 +92,7 @@ export const CompanyExpenseModal: React.FC<CompanyExpenseModalProps> = ({
         id: `item_exp_${Date.now()}_${Math.random().toString(36).substring(2, 5)}`,
         category: 'Relê',
         description: '',
-        quantity: 1,
+        quantity: 0,
         unitPrice: 0,
         subtotal: 0,
       },
@@ -110,6 +110,17 @@ export const CompanyExpenseModal: React.FC<CompanyExpenseModalProps> = ({
   const handleItemChange = (index: number, field: keyof ExpenseItem, value: any) => {
     setItems((prev) => {
       const copy = [...prev];
+      if (field === 'category' && copy[index].category !== value) {
+        copy[index] = {
+          ...copy[index],
+          category: value,
+          quantity: 0,
+          unitPrice: 0,
+          subtotal: 0,
+        };
+        return copy;
+      }
+
       const updatedItem = { ...copy[index], [field]: value };
 
       // Auto recalculate subtotal if quantity or unitPrice changed
@@ -360,10 +371,10 @@ export const CompanyExpenseModal: React.FC<CompanyExpenseModalProps> = ({
                     </div>
 
                     {/* Quantidade, Valor Unitário, Subtotal e Exclusão */}
-                    <div className="flex items-center gap-2 justify-end shrink-0">
+                    <div className="grid grid-cols-2 sm:flex sm:items-end md:items-center gap-2.5 w-full md:w-auto shrink-0">
                       {/* Quantidade */}
-                      <div className="w-20 shrink-0">
-                        <label className="text-3xs font-bold text-slate-400 uppercase block md:hidden mb-0.5">
+                      <div className="w-full md:w-20">
+                        <label className="text-3xs font-bold text-slate-400 uppercase block md:hidden mb-1">
                           Qtd
                         </label>
                         <input
@@ -380,34 +391,45 @@ export const CompanyExpenseModal: React.FC<CompanyExpenseModalProps> = ({
                       </div>
 
                       {/* Valor Unitário */}
-                      <div className="relative w-28 shrink-0">
-                        <label className="text-3xs font-bold text-slate-400 uppercase block md:hidden mb-0.5">
+                      <div className="w-full md:w-28">
+                        <label className="text-3xs font-bold text-slate-400 uppercase block md:hidden mb-1">
                           Unitário
                         </label>
-                        <span className="absolute left-2.5 top-2 text-2xs font-bold text-slate-400">R$</span>
-                        <CurrencyInput
-                          value={item.unitPrice}
-                          onChange={(val) => handleItemChange(index, 'unitPrice', val)}
-                          placeholder="0,00"
-                          className="w-full pl-8 pr-2.5 py-2 bg-white border border-slate-300 rounded-xl text-xs font-black text-right text-slate-900 focus:border-[#F28C1B] focus:ring-2 focus:ring-[#F28C1B]/20 outline-hidden"
-                        />
+                        <div className="relative">
+                          <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-2xs font-bold text-slate-400 pointer-events-none">
+                            R$
+                          </span>
+                          <CurrencyInput
+                            value={item.unitPrice}
+                            onChange={(val) => handleItemChange(index, 'unitPrice', val)}
+                            placeholder="0,00"
+                            className="w-full pl-8 pr-2.5 py-2 bg-white border border-slate-300 rounded-xl text-xs font-black text-right text-slate-900 focus:border-[#F28C1B] focus:ring-2 focus:ring-[#F28C1B]/20 outline-hidden"
+                          />
+                        </div>
                       </div>
 
                       {/* Subtotal do Item */}
-                      <div className="w-28 text-right px-2.5 py-2 bg-white border border-slate-200 rounded-xl text-xs font-black text-[#30334F] shrink-0">
-                        {formatCurrency(item.subtotal)}
+                      <div className="w-full md:w-28">
+                        <label className="text-3xs font-bold text-slate-400 uppercase block md:hidden mb-1">
+                          Total
+                        </label>
+                        <div className="w-full text-right px-2.5 py-2 bg-white border border-slate-200 rounded-xl text-xs font-black text-[#30334F] truncate">
+                          {formatCurrency(item.subtotal)}
+                        </div>
                       </div>
 
                       {/* Botão de Excluir */}
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveItem(index)}
-                        disabled={items.length <= 1}
-                        className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
-                        title="Remover este material"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      <div className="flex items-end sm:items-center justify-end">
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveItem(index)}
+                          disabled={items.length <= 1}
+                          className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
+                          title="Remover este material"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -416,9 +438,9 @@ export const CompanyExpenseModal: React.FC<CompanyExpenseModalProps> = ({
 
             {/* SEÇÃO C: FECHAMENTO FINANCEIRO DA DESPESA */}
             <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200/90 shadow-2xs space-y-4">
-              <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 border-b border-slate-100 pb-2.5">
                 <span className="text-xs font-black text-[#30334F] uppercase tracking-wide flex items-center gap-2">
-                  <DollarSign className="w-4 h-4 text-[#F28C1B]" />
+                  <DollarSign className="w-4 h-4 text-[#F28C1B] shrink-0" />
                   C. Fechamento Financeiro da Despesa
                 </span>
                 <span className="text-3xs font-bold text-slate-400 uppercase">

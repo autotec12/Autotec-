@@ -85,15 +85,15 @@ export const TechnicalServiceModal: React.FC<TechnicalServiceModalProps> = ({
           {
             id: `item_${Date.now()}`,
             category: 'Instalação',
-            description: 'Instalação de rastreador veicular com corte/bloqueio',
-            value: 150,
+            description: '',
+            value: 0,
           },
         ]
   );
 
   const [discount, setDiscount] = useState<number>(orderToEdit?.discount || 0);
   const [paidAmount, setPaidAmount] = useState<number>(
-    orderToEdit?.paidAmount !== undefined ? orderToEdit.paidAmount : 150
+    orderToEdit?.paidAmount !== undefined ? orderToEdit.paidAmount : 0
   );
   const [technicianFee, setTechnicianFee] = useState<number | undefined>(
     orderToEdit?.technicianFee !== undefined ? orderToEdit.technicianFee : undefined
@@ -178,7 +178,7 @@ export const TechnicalServiceModal: React.FC<TechnicalServiceModalProps> = ({
         id: `item_${Date.now()}_${Math.random().toString(36).substring(2, 5)}`,
         category: 'Manutenção',
         description: '',
-        value: 50,
+        value: 0,
       },
     ]);
   };
@@ -194,7 +194,11 @@ export const TechnicalServiceModal: React.FC<TechnicalServiceModalProps> = ({
   const handleItemChange = (index: number, field: keyof TechnicalServiceItem, value: any) => {
     setItems((prev) => {
       const copy = [...prev];
-      copy[index] = { ...copy[index], [field]: value };
+      if (field === 'category' && copy[index].category !== value) {
+        copy[index] = { ...copy[index], category: value, value: 0 };
+      } else {
+        copy[index] = { ...copy[index], [field]: value };
+      }
       return copy;
     });
   };
