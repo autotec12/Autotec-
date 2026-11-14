@@ -86,6 +86,11 @@ export interface Charge {
   balanceHandling?: BalanceHandling;
   balanceScheduledDate?: string;
   notes?: string;
+  isPlanCharge?: boolean;
+  planId?: string;
+  planName?: string;
+  vehicleIds?: string[];
+  vehiclePlates?: string[];
   createdAt: string;
   updatedAt: string;
   createdBy?: string;

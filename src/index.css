@@ -30,6 +30,11 @@
 }
 
 /* Universal Page & Layout Classes */
+html,
+body {
+  overscroll-behavior-y: contain;
+}
+
 body {
   background-color: var(--autotec-bg);
   color: var(--autotec-text);

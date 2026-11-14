@@ -307,3 +307,25 @@ export function getCompetenceLabel(competence: string): string {
   return competence;
 }
 
+/**
+ * Filtra cobranças individuais pendentes e sem pagamento que já foram
+ * substituídas por uma cobrança única de plano na mesma competência,
+ * preservando integralmente cobranças pagas, parciais e de clientes sem plano.
+ */
+export function getEffectiveCharges(charges: Charge[]): Charge[] {
+  const planChargeKeys = new Set(
+    charges
+      .filter((c) => c.isPlanCharge && c.status !== 'cancelado')
+      .map((c) => `${c.clientId}__${c.referenceMonth}`)
+  );
+
+  return charges.filter((c) => {
+    if (!c.isPlanCharge && c.status === 'pendente' && (c.paidAmount || 0) === 0) {
+      if (planChargeKeys.has(`${c.clientId}__${c.referenceMonth}`)) {
+        return false;
+      }
+    }
+    return true;
+  });
+}
+

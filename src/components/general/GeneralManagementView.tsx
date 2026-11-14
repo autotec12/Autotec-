@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { useData } from '../../context/DataContext';
 import { GeneralTransaction, GeneralFinancialSummary } from '../../types';
-import { formatCurrency, formatDate } from '../../lib/calculations';
+import { formatCurrency, formatDate, getEffectiveCharges } from '../../lib/calculations';
 import {
   TrendingUp,
   TrendingDown,
@@ -270,7 +270,8 @@ export const GeneralManagementView: React.FC<GeneralManagementViewProps> = ({ on
     const totalRevenueReceived = monthlyReceived + servicesReceived;
     const netBalance = totalRevenueReceived - expensesPaid;
 
-    const monthlyPending = charges
+    const effectiveCharges = getEffectiveCharges(charges);
+    const monthlyPending = effectiveCharges
       .filter((c) => c.status === 'pendente' || c.status === 'parcial')
       .reduce((acc, c) => acc + (c.remainingBalance || 0), 0);
 

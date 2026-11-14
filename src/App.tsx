@@ -8,6 +8,7 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import { SecurityProvider, useSecurity } from './context/SecurityContext';
 import { DataProvider, useData } from './context/DataContext';
 import { Navigation } from './components/layout/Navigation';
+import { PullToRefresh } from './components/layout/PullToRefresh';
 import { GeneralManagementView } from './components/general/GeneralManagementView';
 import { DashboardView } from './components/dashboard/DashboardView';
 import { ClientsView } from './components/clients/ClientsView';
@@ -22,7 +23,7 @@ import { SettingsView } from './components/settings/SettingsView';
 import { LoginView } from './components/auth/LoginView';
 import { PinUnlockView } from './components/auth/PinUnlockView';
 import { PinSetupView } from './components/auth/PinSetupView';
-import { Loader2, Info } from 'lucide-react';
+import { Loader2, Info, AlertTriangle, RefreshCw } from 'lucide-react';
 
 const VALID_VIEWS = [
   'general_management',
@@ -41,7 +42,15 @@ const VALID_VIEWS = [
 function MainApp() {
   const { user, loading: authLoading } = useAuth();
   const { isUnlocked, hasPinSetup, isCheckingPin } = useSecurity();
-  const { permissionNotice } = useData();
+  const {
+    loading: dataLoading,
+    hasLoadedOnce,
+    isRefreshing,
+    syncError,
+    permissionNotice,
+    retrySync,
+    refreshData,
+  } = useData();
 
   // Persist active view in localStorage so the screen never resets unexpectedly
   const [currentView, setCurrentView] = useState<string>(() => {
@@ -106,8 +115,28 @@ function MainApp() {
       {/* Navigation Header */}
       <Navigation currentView={currentView} onNavigate={handleNavigate} />
 
+      {/* Sync error banner after initial load (preserves loaded data on screen) */}
+      {hasLoadedOnce && syncError && (
+        <div className="bg-amber-50 text-amber-950 px-4 py-2.5 text-xs border-b border-amber-200">
+          <div className="flex flex-wrap items-center justify-between gap-2 max-w-7xl mx-auto w-full">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+              <span className="font-medium">{syncError}</span>
+            </div>
+            <button
+              type="button"
+              onClick={retrySync}
+              className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-2xs font-bold flex items-center gap-1.5 transition cursor-pointer shrink-0"
+            >
+              <RefreshCw className="w-3 h-3" />
+              Tentar sincronizar
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Permission / Sync notification if needed */}
-      {permissionNotice && (
+      {permissionNotice && !syncError && (
         <div className="bg-[#30334F] text-white px-4 py-2 text-xs flex items-center justify-between border-b border-[#23253B]">
           <div className="flex items-center gap-2 max-w-7xl mx-auto w-full">
             <Info className="w-4 h-4 text-[#F28C1B] shrink-0" />
@@ -116,20 +145,69 @@ function MainApp() {
         </div>
       )}
 
-      {/* Main Content Area */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {currentView === 'general_management' && <GeneralManagementView onNavigate={handleNavigate} />}
-        {currentView === 'dashboard' && <DashboardView onNavigate={handleNavigate} />}
-        {currentView === 'clients' && <ClientsView />}
-        {currentView === 'vehicles' && <VehiclesView />}
-        {currentView === 'plans' && <PlansView />}
-        {currentView === 'billing' && <BillingView onNavigate={handleNavigate} />}
-        {currentView === 'services' && <TechnicalServicesView />}
-        {currentView === 'expenses' && <CompanyExpensesView />}
-        {currentView === 'receipts' && <ReceiptsListView />}
-        {currentView === 'reports' && <ReportsView />}
-        {currentView === 'settings' && <SettingsView />}
-      </main>
+      {/* Main Content Area with non-destructive Pull-to-Refresh */}
+      <PullToRefresh
+        onRefresh={refreshData}
+        isRefreshing={isRefreshing}
+        enabled={hasLoadedOnce && !dataLoading}
+      >
+        <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+          {!hasLoadedOnce && syncError ? (
+            <div className="max-w-lg mx-auto my-12 bg-white border border-rose-200 rounded-2xl p-6 shadow-xs text-center space-y-4">
+              <div className="w-12 h-12 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center mx-auto border border-rose-100">
+                <AlertTriangle className="w-6 h-6" />
+              </div>
+              <div className="space-y-1.5">
+                <h2 className="text-base font-bold text-[#30334F]">
+                  Falha na sincronização inicial dos dados
+                </h2>
+                <p className="text-xs text-[#5F647E] leading-relaxed">
+                  {syncError}
+                </p>
+                <p className="text-2xs text-slate-500">
+                  Para evitar exibir saldos zerados ou listas incompletas, os painéis financeiros permanecem protegidos até a confirmação do Firestore.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={retrySync}
+                className="px-5 py-2.5 bg-[#F28C1B] hover:bg-[#DE7B0E] text-white rounded-xl text-xs font-bold shadow-xs inline-flex items-center gap-2 transition cursor-pointer"
+              >
+                <RefreshCw className="w-4 h-4" />
+                Tentar Novamente
+              </button>
+            </div>
+          ) : !hasLoadedOnce || dataLoading ? (
+            <div className="max-w-md mx-auto my-16 bg-white border border-[#E2E4E0] rounded-2xl p-6 shadow-xs flex flex-col items-center text-center gap-3">
+              <div className="w-12 h-12 rounded-xl bg-[#F3F4F2] border border-[#E2E4E0] flex items-center justify-center">
+                <Loader2 className="w-6 h-6 animate-spin text-[#F28C1B]" />
+              </div>
+              <div className="space-y-1">
+                <p className="text-sm font-bold text-[#30334F]">
+                  Carregando dados do sistema...
+                </p>
+                <p className="text-xs text-[#5F647E]">
+                  Sincronizando informações financeiras e cadastros no Cloud Firestore.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <>
+              {currentView === 'general_management' && <GeneralManagementView onNavigate={handleNavigate} />}
+              {currentView === 'dashboard' && <DashboardView onNavigate={handleNavigate} />}
+              {currentView === 'clients' && <ClientsView />}
+              {currentView === 'vehicles' && <VehiclesView />}
+              {currentView === 'plans' && <PlansView />}
+              {currentView === 'billing' && <BillingView onNavigate={handleNavigate} />}
+              {currentView === 'services' && <TechnicalServicesView />}
+              {currentView === 'expenses' && <CompanyExpensesView />}
+              {currentView === 'receipts' && <ReceiptsListView />}
+              {currentView === 'reports' && <ReportsView />}
+              {currentView === 'settings' && <SettingsView />}
+            </>
+          )}
+        </main>
+      </PullToRefresh>
 
       {/* Footer */}
       <footer className="border-t border-[#E2E4E0] bg-white py-4 text-center text-xs text-[#5F647E]">

@@ -1,7 +1,9 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import {
   collection,
   doc,
+  getDocFromServer,
+  getDocsFromServer,
   onSnapshot,
   setDoc,
   updateDoc,
@@ -46,6 +48,11 @@ interface DataContextType {
   companySettings: CompanySettings;
   auditLogs: AuditLog[];
   loading: boolean;
+  hasLoadedOnce: boolean;
+  isRefreshing: boolean;
+  syncError: string | null;
+  retrySync: () => void;
+  refreshData: () => Promise<void>;
   
   // Plan actions
   addPlan: (data: Omit<Plan, 'id' | 'createdAt' | 'updatedAt'>) => Promise<string>;
@@ -226,6 +233,25 @@ const defaultSettings: CompanySettings = {
 
 const DataContext = createContext<DataContextType>({} as DataContextType);
 
+const REQUIRED_DATA_LISTENERS = [
+  { key: 'company_settings', label: 'Configurações da Empresa' },
+  { key: 'clients', label: 'Clientes' },
+  { key: 'vehicles', label: 'Veículos' },
+  { key: 'charges', label: 'Mensalidades' },
+  { key: 'payments', label: 'Pagamentos' },
+  { key: 'plans', label: 'Planos' },
+  { key: 'technical_services', label: 'Serviços Técnicos' },
+  { key: 'company_expenses', label: 'Gastos da Empresa' },
+  { key: 'technicians', label: 'Técnicos' },
+  { key: 'technical_service_types', label: 'Tipos de Serviço' },
+  { key: 'expense_categories', label: 'Categorias de Despesas' },
+  { key: 'fixed_expenses', label: 'Despesas Fixas' },
+  { key: 'technician_payments', label: 'Pagamentos a Técnicos' },
+  { key: 'audit_logs', label: 'Registros de Auditoria' },
+] as const;
+
+type ListenerKey = typeof REQUIRED_DATA_LISTENERS[number]['key'];
+
 export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, profile } = useAuth();
   
@@ -244,29 +270,198 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [companySettings, setCompanySettings] = useState<CompanySettings>(defaultSettings);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(true);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [syncAttempt, setSyncAttempt] = useState(0);
   const [permissionNotice, setPermissionNotice] = useState<string | null>(null);
   const [selectedDetailItem, setSelectedDetailItem] = useState<{ type: 'mensalidade' | 'servico_tecnico' | 'despesa'; id: string } | null>(null);
   const [selectedBillingClientId, setSelectedBillingClientId] = useState<string | null>(null);
 
-  // Helper de erro de snapshot com tolerância a falhas para não travar a UI
-  const handleSnapshotError = (error: unknown, operationType: OperationType, path: string) => {
-    setLoading(false);
-    try {
-      handleFirestoreError(error, operationType, path);
-    } catch (err) {
-      console.warn(`Aviso de permissão/sincronização no Firestore para "${path}":`, err);
-      setPermissionNotice('Sincronização em tempo real com o Firestore (autotec-476bb).');
+  const prevUserUidRef = useRef<string | null>(null);
+  const hasLoadedOnceRef = useRef<boolean>(false);
+  const refreshPromiseRef = useRef<Promise<void> | null>(null);
+
+  useEffect(() => {
+    hasLoadedOnceRef.current = hasLoadedOnce;
+  }, [hasLoadedOnce]);
+
+  // Non-destructive, read-only manual refresh (Pull to Refresh & post-load sync retry)
+  // Keeps all existing state, hasLoadedOnce, and real-time onSnapshot listeners intact.
+  const refreshData = useCallback(async () => {
+    if (!user) return;
+    if (refreshPromiseRef.current) {
+      return refreshPromiseRef.current;
     }
-  };
+
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      setSyncError(
+        'Sem conexão com a internet. Mantendo os últimos dados válidos carregados em tela.'
+      );
+      return;
+    }
+
+    setIsRefreshing(true);
+
+    const runRefresh = (async () => {
+      try {
+        const auditQuery = query(collection(db, 'audit_logs'), orderBy('timestamp', 'desc'), limit(50));
+
+        const fetchAll = Promise.allSettled([
+          getDocFromServer(doc(db, 'company_settings', 'default')),
+          getDocsFromServer(collection(db, 'clients')),
+          getDocsFromServer(collection(db, 'vehicles')),
+          getDocsFromServer(collection(db, 'charges')),
+          getDocsFromServer(collection(db, 'payments')),
+          getDocsFromServer(collection(db, 'plans')),
+          getDocsFromServer(collection(db, 'technical_services')),
+          getDocsFromServer(collection(db, 'company_expenses')),
+          getDocsFromServer(collection(db, 'technicians')),
+          getDocsFromServer(collection(db, 'technical_service_types')),
+          getDocsFromServer(collection(db, 'expense_categories')),
+          getDocsFromServer(collection(db, 'fixed_expenses')),
+          getDocsFromServer(collection(db, 'technician_payments')),
+          getDocsFromServer(auditQuery),
+        ]);
+
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error('SYNC_TIMEOUT')), 10000);
+        });
+
+        const results = await Promise.race([fetchAll, timeoutPromise]);
+        const failedLabels: string[] = [];
+
+        // 1. Company Settings
+        const settingsRes = results[0];
+        if (settingsRes.status === 'fulfilled') {
+          const snap = settingsRes.value;
+          if (snap.exists()) {
+            setCompanySettings({ ...defaultSettings, ...snap.data(), id: 'default' } as CompanySettings);
+          } else {
+            setCompanySettings(defaultSettings);
+          }
+        } else {
+          failedLabels.push('Configurações da Empresa');
+        }
+
+        // Helper for collection snapshot mapping
+        const mapDocs = <T extends { id: string }>(snap: { forEach: (cb: (d: any) => void) => void }) => {
+          const list: T[] = [];
+          snap.forEach((docSnap) => {
+            list.push({ id: docSnap.id, ...docSnap.data() } as T);
+          });
+          return list;
+        };
+
+        // 2. Clients
+        if (results[1].status === 'fulfilled') {
+          setClients(mapDocs<Client>(results[1].value).sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')));
+        } else failedLabels.push('Clientes');
+
+        // 3. Vehicles
+        if (results[2].status === 'fulfilled') {
+          setVehicles(mapDocs<Vehicle>(results[2].value).sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')));
+        } else failedLabels.push('Veículos');
+
+        // 4. Charges
+        if (results[3].status === 'fulfilled') {
+          setCharges(mapDocs<Charge>(results[3].value).sort((a, b) => (b.dueDate || '').localeCompare(a.dueDate || '')));
+        } else failedLabels.push('Mensalidades');
+
+        // 5. Payments
+        if (results[4].status === 'fulfilled') {
+          setPayments(mapDocs<Payment>(results[4].value).sort((a, b) => (b.paymentDate || '').localeCompare(a.paymentDate || '')));
+        } else failedLabels.push('Pagamentos');
+
+        // 6. Plans
+        if (results[5].status === 'fulfilled') {
+          setPlans(mapDocs<Plan>(results[5].value).sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')));
+        } else failedLabels.push('Planos');
+
+        // 7. Technical Services
+        if (results[6].status === 'fulfilled') {
+          setTechnicalServices(mapDocs<TechnicalServiceOrder>(results[6].value).sort((a, b) => (b.date || '').localeCompare(a.date || '')));
+        } else failedLabels.push('Serviços Técnicos');
+
+        // 8. Company Expenses
+        if (results[7].status === 'fulfilled') {
+          setCompanyExpenses(mapDocs<CompanyExpense>(results[7].value).sort((a, b) => (b.date || '').localeCompare(a.date || '')));
+        } else failedLabels.push('Gastos da Empresa');
+
+        // 9. Technicians
+        if (results[8].status === 'fulfilled') {
+          setTechnicians(mapDocs<Technician>(results[8].value).sort((a, b) => (a.name || '').localeCompare(b.name || '')));
+        } else failedLabels.push('Técnicos');
+
+        // 10. Technical Service Types
+        if (results[9].status === 'fulfilled') {
+          setTechnicalServiceTypes(mapDocs<TechnicalServiceType>(results[9].value).sort((a, b) => (a.name || '').localeCompare(b.name || '')));
+        } else failedLabels.push('Tipos de Serviço');
+
+        // 11. Custom Expense Categories
+        if (results[10].status === 'fulfilled') {
+          setCustomExpenseCategories(mapDocs<ExpenseCategoryItem>(results[10].value).sort((a, b) => (a.name || '').localeCompare(b.name || '')));
+        } else failedLabels.push('Categorias de Despesas');
+
+        // 12. Fixed Expenses
+        if (results[11].status === 'fulfilled') {
+          setFixedExpenses(mapDocs<FixedExpense>(results[11].value).sort((a, b) => (a.name || '').localeCompare(b.name || '')));
+        } else failedLabels.push('Despesas Fixas');
+
+        // 13. Technician Payments
+        if (results[12].status === 'fulfilled') {
+          setTechnicianPayments(mapDocs<TechnicianPayment>(results[12].value).sort((a, b) => (b.paymentDate || '').localeCompare(a.paymentDate || '')));
+        } else failedLabels.push('Pagamentos a Técnicos');
+
+        // 14. Audit Logs
+        if (results[13].status === 'fulfilled') {
+          setAuditLogs(mapDocs<AuditLog>(results[13].value));
+        } else failedLabels.push('Registros de Auditoria');
+
+        if (failedLabels.length > 0) {
+          setSyncError(
+            `Não foi possível atualizar: ${failedLabels.join(', ')}. Mantendo os últimos dados válidos em tela.`
+          );
+        } else {
+          setSyncError(null);
+          setPermissionNotice(null);
+        }
+      } catch (err) {
+        console.warn('Manual refresh notice:', err);
+        setSyncError(
+          'Não foi possível concluir a atualização com o Cloud Firestore. Mantendo os últimos dados válidos em tela.'
+        );
+      } finally {
+        refreshPromiseRef.current = null;
+        setIsRefreshing(false);
+      }
+    })();
+
+    refreshPromiseRef.current = runRefresh;
+    return runRefresh;
+  }, [user]);
+
+  const retrySync = useCallback(() => {
+    if (hasLoadedOnceRef.current) {
+      void refreshData();
+      return;
+    }
+    setSyncError(null);
+    setLoading(true);
+    setSyncAttempt((prev) => prev + 1);
+  }, [refreshData]);
 
   // Sync Listeners
   useEffect(() => {
     // Only attach if user is signed in
     if (!user) {
+      prevUserUidRef.current = null;
+      hasLoadedOnceRef.current = false;
       setClients([]);
       setVehicles([]);
       setCharges([]);
       setPayments([]);
+      setPlans([]);
       setTechnicalServices([]);
       setCompanyExpenses([]);
       setTechnicians([]);
@@ -274,28 +469,107 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setTechnicalServiceTypes([]);
       setCustomExpenseCategories([]);
       setFixedExpenses([]);
+      setCompanySettings(defaultSettings);
       setAuditLogs([]);
+      setHasLoadedOnce(false);
+      setSyncError(null);
+      setPermissionNotice(null);
       setLoading(false);
       return;
     }
 
-    setLoading(true);
+    const isDifferentUser = prevUserUidRef.current !== user.uid;
+    if (isDifferentUser) {
+      prevUserUidRef.current = user.uid;
+      hasLoadedOnceRef.current = false;
+      setClients([]);
+      setVehicles([]);
+      setCharges([]);
+      setPayments([]);
+      setPlans([]);
+      setTechnicalServices([]);
+      setCompanyExpenses([]);
+      setTechnicians([]);
+      setTechnicianPayments([]);
+      setTechnicalServiceTypes([]);
+      setCustomExpenseCategories([]);
+      setFixedExpenses([]);
+      setCompanySettings(defaultSettings);
+      setAuditLogs([]);
+      setHasLoadedOnce(false);
+    }
 
-    // 1. Company Settings
+    if (!hasLoadedOnceRef.current) {
+      setLoading(true);
+    }
+    setSyncError(null);
+
+    let isActive = true;
+    const respondedKeys = new Set<ListenerKey>();
+    const erroredCollections = new Map<ListenerKey, string>();
+
+    const updateSyncState = () => {
+      if (!isActive) return;
+
+      const allSettled = REQUIRED_DATA_LISTENERS.every((item) => respondedKeys.has(item.key));
+
+      if (erroredCollections.size > 0) {
+        const failedLabels = Array.from(erroredCollections.values()).join(', ');
+        setSyncError(
+          `Não foi possível sincronizar: ${failedLabels}. Os dados apresentados podem estar incompletos.`
+        );
+        if (allSettled) {
+          setLoading(false);
+        }
+        return;
+      }
+
+      setSyncError(null);
+      setPermissionNotice(null);
+
+      if (allSettled) {
+        hasLoadedOnceRef.current = true;
+        setHasLoadedOnce(true);
+        setLoading(false);
+      }
+    };
+
+    const markSuccess = (key: ListenerKey) => {
+      respondedKeys.add(key);
+      erroredCollections.delete(key);
+      updateSyncState();
+    };
+
+    const markError = (
+      key: ListenerKey,
+      label: string,
+      error: unknown,
+      operationType: OperationType,
+      path: string
+    ) => {
+      respondedKeys.add(key);
+      erroredCollections.set(key, label);
+      try {
+        handleFirestoreError(error, operationType, path);
+      } catch (err) {
+        console.warn(`Aviso de permissão/sincronização no Firestore para "${path}":`, err);
+      }
+      updateSyncState();
+    };
+
+    // 1. Company Settings (Read-only on snapshot; never overwrite existing settings automatically)
     const unsubSettings = onSnapshot(
       doc(db, 'company_settings', 'default'),
       (snap) => {
         if (snap.exists()) {
           setCompanySettings({ ...defaultSettings, ...snap.data(), id: 'default' } as CompanySettings);
         } else {
-          // Initialize default company settings if not present
-          setDoc(doc(db, 'company_settings', 'default'), defaultSettings).catch((err) => {
-            console.warn('Notice saving default company settings:', err);
-          });
+          setCompanySettings(defaultSettings);
         }
+        markSuccess('company_settings');
       },
       (error) => {
-        handleSnapshotError(error, OperationType.GET, 'company_settings/default');
+        markError('company_settings', 'Configurações da Empresa', error, OperationType.GET, 'company_settings/default');
       }
     );
 
@@ -308,9 +582,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           list.push({ id: docSnap.id, ...docSnap.data() } as Client);
         });
         setClients(list.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')));
+        markSuccess('clients');
       },
       (error) => {
-        handleSnapshotError(error, OperationType.LIST, 'clients');
+        markError('clients', 'Clientes', error, OperationType.LIST, 'clients');
       }
     );
 
@@ -323,9 +598,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           list.push({ id: docSnap.id, ...docSnap.data() } as Vehicle);
         });
         setVehicles(list.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')));
+        markSuccess('vehicles');
       },
       (error) => {
-        handleSnapshotError(error, OperationType.LIST, 'vehicles');
+        markError('vehicles', 'Veículos', error, OperationType.LIST, 'vehicles');
       }
     );
 
@@ -338,9 +614,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           list.push({ id: docSnap.id, ...docSnap.data() } as Charge);
         });
         setCharges(list.sort((a, b) => (b.dueDate || '').localeCompare(a.dueDate || '')));
+        markSuccess('charges');
       },
       (error) => {
-        handleSnapshotError(error, OperationType.LIST, 'charges');
+        markError('charges', 'Mensalidades', error, OperationType.LIST, 'charges');
       }
     );
 
@@ -353,13 +630,14 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           list.push({ id: docSnap.id, ...docSnap.data() } as Payment);
         });
         setPayments(list.sort((a, b) => (b.paymentDate || '').localeCompare(a.paymentDate || '')));
+        markSuccess('payments');
       },
       (error) => {
-        handleSnapshotError(error, OperationType.LIST, 'payments');
+        markError('payments', 'Pagamentos', error, OperationType.LIST, 'payments');
       }
     );
 
-    // 6. Plans
+    // 6. Plans (Read-only on snapshot; do not auto-seed during initial load)
     const unsubPlans = onSnapshot(
       collection(db, 'plans'),
       (snap) => {
@@ -368,29 +646,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           list.push({ id: docSnap.id, ...docSnap.data() } as Plan);
         });
         setPlans(list.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')));
-        
-        // Auto-seed initial 4 default plans if database has no plans yet
-        if (snap.empty && user) {
-          const now = new Date().toISOString();
-          INITIAL_DEFAULT_PLANS.forEach(async (p, idx) => {
-            const planId = `plan_default_${idx + 1}_${p.name.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
-            const docData: Plan = {
-              ...p,
-              id: planId,
-              createdAt: now,
-              updatedAt: now,
-              createdBy: user.uid,
-            };
-            try {
-              await setDoc(doc(db, 'plans', planId), cleanFirestoreData(docData));
-            } catch (e) {
-              console.warn('Auto-seed plan note:', e);
-            }
-          });
-        }
+        markSuccess('plans');
       },
       (error) => {
-        handleSnapshotError(error, OperationType.LIST, 'plans');
+        markError('plans', 'Planos', error, OperationType.LIST, 'plans');
       }
     );
 
@@ -403,9 +662,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           list.push({ id: docSnap.id, ...docSnap.data() } as TechnicalServiceOrder);
         });
         setTechnicalServices(list.sort((a, b) => (b.date || '').localeCompare(a.date || '')));
+        markSuccess('technical_services');
       },
       (error) => {
-        handleSnapshotError(error, OperationType.LIST, 'technical_services');
+        markError('technical_services', 'Serviços Técnicos', error, OperationType.LIST, 'technical_services');
       }
     );
 
@@ -418,9 +678,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           list.push({ id: docSnap.id, ...docSnap.data() } as CompanyExpense);
         });
         setCompanyExpenses(list.sort((a, b) => (b.date || '').localeCompare(a.date || '')));
+        markSuccess('company_expenses');
       },
       (error) => {
-        handleSnapshotError(error, OperationType.LIST, 'company_expenses');
+        markError('company_expenses', 'Gastos da Empresa', error, OperationType.LIST, 'company_expenses');
       }
     );
 
@@ -433,9 +694,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           list.push({ id: docSnap.id, ...docSnap.data() } as Technician);
         });
         setTechnicians(list.sort((a, b) => (a.name || '').localeCompare(b.name || '')));
+        markSuccess('technicians');
       },
       (error) => {
-        handleSnapshotError(error, OperationType.LIST, 'technicians');
+        markError('technicians', 'Técnicos', error, OperationType.LIST, 'technicians');
       }
     );
 
@@ -448,9 +710,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           list.push({ id: docSnap.id, ...docSnap.data() } as TechnicalServiceType);
         });
         setTechnicalServiceTypes(list.sort((a, b) => (a.name || '').localeCompare(b.name || '')));
+        markSuccess('technical_service_types');
       },
       (error) => {
-        handleSnapshotError(error, OperationType.LIST, 'technical_service_types');
+        markError('technical_service_types', 'Tipos de Serviço', error, OperationType.LIST, 'technical_service_types');
       }
     );
 
@@ -463,13 +726,14 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           list.push({ id: docSnap.id, ...docSnap.data() } as ExpenseCategoryItem);
         });
         setCustomExpenseCategories(list.sort((a, b) => (a.name || '').localeCompare(b.name || '')));
+        markSuccess('expense_categories');
       },
       (error) => {
-        handleSnapshotError(error, OperationType.LIST, 'expense_categories');
+        markError('expense_categories', 'Categorias de Despesas', error, OperationType.LIST, 'expense_categories');
       }
     );
 
-    // 11.1 Fixed Expenses (Despesas Fixas e Custos Recorrentes)
+    // 12. Fixed Expenses (Despesas Fixas e Custos Recorrentes)
     const unsubFixedExpenses = onSnapshot(
       collection(db, 'fixed_expenses'),
       (snap) => {
@@ -478,13 +742,14 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           list.push({ id: docSnap.id, ...docSnap.data() } as FixedExpense);
         });
         setFixedExpenses(list.sort((a, b) => (a.name || '').localeCompare(b.name || '')));
+        markSuccess('fixed_expenses');
       },
       (error) => {
-        handleSnapshotError(error, OperationType.LIST, 'fixed_expenses');
+        markError('fixed_expenses', 'Despesas Fixas', error, OperationType.LIST, 'fixed_expenses');
       }
     );
 
-    // 12. Technician Payments
+    // 13. Technician Payments
     const unsubTechPayments = onSnapshot(
       collection(db, 'technician_payments'),
       (snap) => {
@@ -493,13 +758,14 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           list.push({ id: docSnap.id, ...docSnap.data() } as TechnicianPayment);
         });
         setTechnicianPayments(list.sort((a, b) => (b.paymentDate || '').localeCompare(a.paymentDate || '')));
+        markSuccess('technician_payments');
       },
       (error) => {
-        handleSnapshotError(error, OperationType.LIST, 'technician_payments');
+        markError('technician_payments', 'Pagamentos a Técnicos', error, OperationType.LIST, 'technician_payments');
       }
     );
 
-    // 13. Audit Logs
+    // 14. Audit Logs
     const auditQuery = query(collection(db, 'audit_logs'), orderBy('timestamp', 'desc'), limit(50));
     const unsubAudit = onSnapshot(
       auditQuery,
@@ -509,21 +775,69 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           list.push({ id: docSnap.id, ...docSnap.data() } as AuditLog);
         });
         setAuditLogs(list);
-        setLoading(false);
+        markSuccess('audit_logs');
       },
       (error) => {
-        console.warn('Audit logs snapshot info:', error);
-        setLoading(false);
+        markError('audit_logs', 'Registros de Auditoria', error, OperationType.LIST, 'audit_logs');
       }
     );
 
-    // Initial timeout safeguard so UI never hangs indefinitely in loading
-    const timer = setTimeout(() => {
-      setLoading(false);
-    }, 1500);
+    // Offline / connection-unavailability detection (never treats unreceived data as zero)
+    const handleOffline = () => {
+      if (!isActive) return;
+      if (!hasLoadedOnceRef.current) {
+        setSyncError(
+          'Sem conexão com a internet. Não foi possível sincronizar os dados com o Cloud Firestore.'
+        );
+        setLoading(false);
+      } else {
+        setSyncError(
+          'Conexão com a internet interrompida. Exibindo os últimos dados válidos carregados; novas atualizações serão sincronizadas ao reconectar.'
+        );
+      }
+    };
+
+    const handleOnline = () => {
+      if (!isActive) return;
+      const allSettled = REQUIRED_DATA_LISTENERS.every((item) => respondedKeys.has(item.key));
+      if (!allSettled && !hasLoadedOnceRef.current) {
+        setSyncError(null);
+        setLoading(true);
+      } else if (erroredCollections.size === 0) {
+        setSyncError(null);
+      }
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('offline', handleOffline);
+      window.addEventListener('online', handleOnline);
+      if (typeof navigator !== 'undefined' && !navigator.onLine && !hasLoadedOnceRef.current) {
+        handleOffline();
+      }
+    }
+
+    // Connection-timeout safeguard only for reporting unavailability if Firestore never responds
+    const connectionGuardTimer = setTimeout(() => {
+      if (!isActive) return;
+      const allSettled = REQUIRED_DATA_LISTENERS.every((item) => respondedKeys.has(item.key));
+      if (!allSettled && !hasLoadedOnceRef.current) {
+        const pendingLabels = REQUIRED_DATA_LISTENERS
+          .filter((item) => !respondedKeys.has(item.key))
+          .map((item) => item.label);
+        setSyncError(
+          `Não foi possível concluir a sincronização inicial com o Cloud Firestore (${pendingLabels.slice(0, 4).join(', ')}${pendingLabels.length > 4 ? ' e outras coleções' : ''}). Verifique sua conexão e tente novamente.`
+        );
+        setLoading(false);
+      }
+    }, 10000);
 
     return () => {
-      clearTimeout(timer);
+      isActive = false;
+      clearTimeout(connectionGuardTimer);
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('offline', handleOffline);
+        window.removeEventListener('online', handleOnline);
+      }
       unsubSettings();
       unsubClients();
       unsubVehicles();
@@ -539,7 +853,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       unsubFixedExpenses();
       unsubAudit();
     };
-  }, [user?.uid]);
+  }, [user?.uid, syncAttempt]);
 
   // Log Audit Action Helper
   const logAudit = async (action: string, entity: string, entityId: string, details: string) => {
@@ -814,8 +1128,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   // CHARGE ACTIONS
-  const addCharge = async (data: Omit<Charge, 'id' | 'createdAt' | 'updatedAt'>) => {
-    const id = `chg_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+  const addCharge = async (data: Omit<Charge, 'id' | 'createdAt' | 'updatedAt'>, customId?: string) => {
+    const id = customId || `chg_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     const now = new Date().toISOString();
     const newCharge: Charge = {
       ...data,
@@ -881,15 +1195,137 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // Generate Monthly Charges for Active Vehicles
+  // Generate Monthly Charges: mutually exclusive — 1 charge per client plan, or 1 per vehicle for clients without a plan
   const generateMonthlyCharges = async (month: string) => {
     let created = 0;
     let skipped = 0;
 
     const activeVehicles = vehicles.filter((v) => v.status === 'ativo');
+    const activePlans = plans.filter((p) => p.status === 'ativo');
 
-    for (const vehicle of activeVehicles) {
-      // Check if charge already exists for this vehicle and month
+    // Track which vehicles are covered by a plan so they NEVER generate individual charges
+    const coveredVehicleIds = new Set<string>();
+    const planGroups = new Map<string, { clientId: string; planId: string; planName: string; planValue: number; vehicles: typeof activeVehicles }>();
+
+    // 1A. Identify plans directly linked to clients (client.planId) — PRIMARY source of truth
+    for (const client of clients) {
+      if (client.status === 'inativo' || !client.planId) continue;
+      const plan = activePlans.find((p) => p.id === client.planId);
+      if (!plan) continue;
+
+      const clientVehicles = activeVehicles.filter((v) => v.clientId === client.id);
+      if (clientVehicles.length === 0) continue;
+
+      const key = `${client.id}__${plan.id}`;
+      planGroups.set(key, {
+        clientId: client.id,
+        planId: plan.id,
+        planName: plan.name || client.planName || 'Plano',
+        planValue: Number(plan.totalMonthlyValue) || 0,
+        vehicles: clientVehicles,
+      });
+      clientVehicles.forEach((v) => coveredVehicleIds.add(v.id));
+    }
+
+    // 1B. Fallback: group any remaining active vehicles that have vehicle.planId set
+    for (const v of activeVehicles) {
+      if (coveredVehicleIds.has(v.id)) continue;
+      if (v.planId) {
+        const key = `${v.clientId}__${v.planId}`;
+        const existing = planGroups.get(key);
+        if (existing) {
+          existing.vehicles.push(v);
+        } else {
+          const plan = activePlans.find((p) => p.id === v.planId);
+          planGroups.set(key, {
+            clientId: v.clientId,
+            planId: v.planId,
+            planName: plan?.name || v.planName || 'Plano',
+            planValue: Number(plan?.totalMonthlyValue ?? v.monthlyValue) || 0,
+            vehicles: [v],
+          });
+        }
+        coveredVehicleIds.add(v.id);
+      }
+    }
+
+    // Remaining vehicles without any plan
+    const standaloneVehicles = activeVehicles.filter((v) => !coveredVehicleIds.has(v.id));
+
+    // 2. Generate ONE single charge per client plan
+    for (const [, group] of planGroups.entries()) {
+      const { clientId, planId, planName, planValue, vehicles: groupVehicles } = group;
+      const firstVehicle = groupVehicles[0];
+      const groupVehicleIds = groupVehicles.map((v) => v.id);
+
+      // Check if a plan charge already exists for this client/plan/month
+      const exists = charges.some(
+        (c) =>
+          c.referenceMonth === month &&
+          c.status !== 'cancelado' &&
+          c.isPlanCharge &&
+          c.clientId === clientId &&
+          c.planId === planId
+      );
+
+      if (exists) {
+        skipped++;
+        continue;
+      }
+
+      const client = clients.find((c) => c.id === clientId);
+      const clientName = client?.name || 'Cliente';
+      const dueDayFormatted = String(Math.min(Math.max(firstVehicle.dueDay || 10, 1), 28)).padStart(2, '0');
+      const dueDate = `${month}-${dueDayFormatted}`;
+      const platesList = groupVehicles.map((v) => v.plate);
+
+      const deterministicPlanChargeId = `chg_plan_${clientId}_${planId}_${month}`.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+      await addCharge({
+        clientId,
+        clientName,
+        vehicleId: firstVehicle.id,
+        vehiclePlate: platesList.join(', '),
+        vehicleModel: `${groupVehicles.length} veículo(s) vinculados`,
+        referenceMonth: month,
+        originalMonthlyValue: planValue,
+        previousBalanceCarried: 0,
+        discount: 0,
+        addition: 0,
+        totalAmount: planValue,
+        paidAmount: 0,
+        remainingBalance: planValue,
+        dueDate,
+        status: 'pendente',
+        balanceHandling: 'none',
+        isPlanCharge: true,
+        planId,
+        planName,
+        vehicleIds: groupVehicleIds,
+        vehiclePlates: platesList,
+      }, deterministicPlanChargeId);
+
+      // Safely mark any old unpaid individual charges for these vehicles in this month as superseded (preserving documents & paid/partial records)
+      const supersededCharges = charges.filter(
+        (c) =>
+          !c.isPlanCharge &&
+          c.referenceMonth === month &&
+          c.status === 'pendente' &&
+          (c.paidAmount || 0) === 0 &&
+          (c.clientId === clientId || groupVehicleIds.includes(c.vehicleId))
+      );
+      for (const oldChg of supersededCharges) {
+        await updateCharge(oldChg.id, {
+          status: 'cancelado',
+          notes: `Substituída por cobrança única do plano (${planName}) - Ref: ${deterministicPlanChargeId}`,
+        });
+      }
+
+      created++;
+    }
+
+    // 3. Generate individual charges for vehicles WITHOUT a plan
+    for (const vehicle of standaloneVehicles) {
       const exists = charges.some(
         (c) => c.vehicleId === vehicle.id && c.referenceMonth === month && c.status !== 'cancelado'
       );
@@ -902,17 +1338,17 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const client = clients.find((c) => c.id === vehicle.clientId);
       const clientName = client?.name || 'Cliente';
 
-      // Check if previous charge had balance carried over
       const prevCharges = charges.filter(
         (c) => c.vehicleId === vehicle.id && c.remainingBalance > 0 && c.balanceHandling === 'next_month'
       );
       const carriedBalance = prevCharges.reduce((sum, item) => sum + item.remainingBalance, 0);
 
-      // Formulate dueDate for month (YYYY-MM-DD)
       const dueDayFormatted = String(Math.min(Math.max(vehicle.dueDay || 10, 1), 28)).padStart(2, '0');
       const dueDate = `${month}-${dueDayFormatted}`;
 
       const totalAmount = Number(vehicle.monthlyValue) + carriedBalance;
+
+      const deterministicVehChargeId = `chg_veh_${vehicle.id}_${month}`.replace(/[^a-zA-Z0-9_-]/g, '_');
 
       await addCharge({
         clientId: vehicle.clientId,
@@ -931,7 +1367,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         dueDate,
         status: 'pendente',
         balanceHandling: 'none',
-      });
+      }, deterministicVehChargeId);
 
       created++;
     }
@@ -2464,6 +2900,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         companySettings,
         auditLogs,
         loading,
+        hasLoadedOnce,
+        isRefreshing,
+        syncError,
+        retrySync,
+        refreshData,
         addPlan,
         updatePlan,
         deletePlan,

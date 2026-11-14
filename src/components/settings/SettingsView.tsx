@@ -48,6 +48,8 @@ export const SettingsView: React.FC = () => {
 
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [isDirty, setIsDirty] = useState(false);
+  const [hasPendingRemoteUpdate, setHasPendingRemoteUpdate] = useState(false);
   const [seeding, setSeeding] = useState(false);
   const [activeTab, setActiveTab] = useState<'empresa' | 'seguranca' | 'instalacao' | 'auditoria'>('empresa');
 
@@ -71,25 +73,38 @@ export const SettingsView: React.FC = () => {
   const [pinSuccess, setPinSuccess] = useState<string | null>(null);
   const [pinError, setPinError] = useState<string | null>(null);
 
-  // Synchronize with Firestore real-time updates
+  const syncFieldsFromSettings = React.useCallback((settings: typeof companySettings) => {
+    setCompanyName(settings.companyName || '');
+    setTradeName(settings.tradeName || '');
+    setCnpj(settings.cnpj || '');
+    setPhone(settings.phone || '');
+    setWhatsapp(settings.whatsapp || '');
+    setEmail(settings.email || '');
+    setWebsite(settings.website || '');
+    setAddress(settings.address || '');
+    setCity(settings.city || '');
+    setState(settings.state || '');
+    setZipCode(settings.zipCode || '');
+    setPixKey(settings.pixKey || '');
+    setPixKeyType(settings.pixKeyType || 'CNPJ');
+    setReceiptFooterMessage(settings.receiptFooterMessage || '');
+  }, []);
+
+  const handleFieldEdit = <T,>(setter: React.Dispatch<React.SetStateAction<T>>, value: T) => {
+    setIsDirty(true);
+    setter(value);
+  };
+
+  // Synchronize with Firestore real-time updates only when there are no unsaved edits
   React.useEffect(() => {
-    if (companySettings) {
-      setCompanyName(companySettings.companyName || '');
-      setTradeName(companySettings.tradeName || '');
-      setCnpj(companySettings.cnpj || '');
-      setPhone(companySettings.phone || '');
-      setWhatsapp(companySettings.whatsapp || '');
-      setEmail(companySettings.email || '');
-      setWebsite(companySettings.website || '');
-      setAddress(companySettings.address || '');
-      setCity(companySettings.city || '');
-      setState(companySettings.state || '');
-      setZipCode(companySettings.zipCode || '');
-      setPixKey(companySettings.pixKey || '');
-      setPixKeyType(companySettings.pixKeyType || 'CNPJ');
-      setReceiptFooterMessage(companySettings.receiptFooterMessage || '');
+    if (!companySettings) return;
+    if (!isDirty) {
+      syncFieldsFromSettings(companySettings);
+      setHasPendingRemoteUpdate(false);
+    } else {
+      setHasPendingRemoteUpdate(true);
     }
-  }, [companySettings]);
+  }, [companySettings, isDirty, syncFieldsFromSettings]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -115,6 +130,8 @@ export const SettingsView: React.FC = () => {
         pixKeyType,
         receiptFooterMessage,
       });
+      setIsDirty(false);
+      setHasPendingRemoteUpdate(false);
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3500);
     } catch (err: any) {
@@ -219,6 +236,23 @@ export const SettingsView: React.FC = () => {
       {/* TAB 1: DADOS DA EMPRESA */}
       {activeTab === 'empresa' && (
         <form onSubmit={handleSubmit} className="bg-white border border-[#E2E4E0] rounded-2xl p-6 shadow-xs space-y-6">
+          {hasPendingRemoteUpdate && isDirty && (
+            <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 font-medium flex flex-wrap items-center justify-between gap-2">
+              <span>As configurações foram atualizadas no Firestore enquanto você editava. Suas alterações locais foram preservadas.</span>
+              <button
+                type="button"
+                onClick={() => {
+                  syncFieldsFromSettings(companySettings);
+                  setIsDirty(false);
+                  setHasPendingRemoteUpdate(false);
+                }}
+                className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-2xs font-bold cursor-pointer"
+              >
+                Carregar dados salvos
+              </button>
+            </div>
+          )}
+
           {saveSuccess && (
             <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 font-bold flex items-center gap-2">
               <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
@@ -299,7 +333,7 @@ export const SettingsView: React.FC = () => {
                 <input
                   type="text"
                   value={companyName}
-                  onChange={(e) => setCompanyName(e.target.value)}
+                  onChange={(e) => handleFieldEdit(setCompanyName, e.target.value)}
                   disabled={!isAdmin || saving}
                   required
                   placeholder="Ex: AUTOTEC RASTREAMENTO VEICULAR LTDA"
@@ -313,7 +347,7 @@ export const SettingsView: React.FC = () => {
                 <input
                   type="text"
                   value={tradeName}
-                  onChange={(e) => setTradeName(e.target.value)}
+                  onChange={(e) => handleFieldEdit(setTradeName, e.target.value)}
                   disabled={!isAdmin || saving}
                   placeholder="Ex: AUTOTEC Rastreamento"
                   className="w-full bg-[#F8F9FA] border border-[#DCE0D9] rounded-xl px-3.5 py-2.5 text-sm text-[#1E2235] focus:outline-hidden focus:border-[#30334F] focus:bg-white disabled:opacity-70 disabled:cursor-not-allowed"
@@ -329,7 +363,7 @@ export const SettingsView: React.FC = () => {
                 <input
                   type="text"
                   value={cnpj}
-                  onChange={(e) => setCnpj(e.target.value)}
+                  onChange={(e) => handleFieldEdit(setCnpj, e.target.value)}
                   disabled={!isAdmin || saving}
                   required
                   placeholder="00.000.000/0001-00 ou 000.000.000-00"
@@ -343,7 +377,7 @@ export const SettingsView: React.FC = () => {
                 <input
                   type="text"
                   value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
+                  onChange={(e) => handleFieldEdit(setPhone, e.target.value)}
                   disabled={!isAdmin || saving}
                   placeholder="(00) 0000-0000"
                   className="w-full bg-[#F8F9FA] border border-[#DCE0D9] rounded-xl px-3.5 py-2.5 text-sm text-[#1E2235] focus:outline-hidden focus:border-[#30334F] focus:bg-white disabled:opacity-70 disabled:cursor-not-allowed"
@@ -356,7 +390,7 @@ export const SettingsView: React.FC = () => {
                 <input
                   type="text"
                   value={whatsapp}
-                  onChange={(e) => setWhatsapp(e.target.value)}
+                  onChange={(e) => handleFieldEdit(setWhatsapp, e.target.value)}
                   disabled={!isAdmin || saving}
                   placeholder="(00) 90000-0000"
                   className="w-full bg-[#F8F9FA] border border-[#DCE0D9] rounded-xl px-3.5 py-2.5 text-sm text-[#1E2235] focus:outline-hidden focus:border-[#30334F] focus:bg-white disabled:opacity-70 disabled:cursor-not-allowed"
@@ -372,7 +406,7 @@ export const SettingsView: React.FC = () => {
                 <input
                   type="email"
                   value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  onChange={(e) => handleFieldEdit(setEmail, e.target.value)}
                   disabled={!isAdmin || saving}
                   placeholder="contato@autotec.com.br"
                   className="w-full bg-[#F8F9FA] border border-[#DCE0D9] rounded-xl px-3.5 py-2.5 text-sm text-[#1E2235] focus:outline-hidden focus:border-[#30334F] focus:bg-white disabled:opacity-70 disabled:cursor-not-allowed"
@@ -385,7 +419,7 @@ export const SettingsView: React.FC = () => {
                 <input
                   type="text"
                   value={website}
-                  onChange={(e) => setWebsite(e.target.value)}
+                  onChange={(e) => handleFieldEdit(setWebsite, e.target.value)}
                   disabled={!isAdmin || saving}
                   placeholder="www.autotec.com.br"
                   className="w-full bg-[#F8F9FA] border border-[#DCE0D9] rounded-xl px-3.5 py-2.5 text-sm text-[#1E2235] focus:outline-hidden focus:border-[#30334F] focus:bg-white disabled:opacity-70 disabled:cursor-not-allowed"
@@ -408,7 +442,7 @@ export const SettingsView: React.FC = () => {
               <input
                 type="text"
                 value={address}
-                onChange={(e) => setAddress(e.target.value)}
+                onChange={(e) => handleFieldEdit(setAddress, e.target.value)}
                 disabled={!isAdmin || saving}
                 placeholder="Ex: Av. Paulista, 1000, Bela Vista"
                 className="w-full bg-[#F8F9FA] border border-[#DCE0D9] rounded-xl px-3.5 py-2.5 text-sm text-[#1E2235] focus:outline-hidden focus:border-[#30334F] focus:bg-white disabled:opacity-70 disabled:cursor-not-allowed"
@@ -423,7 +457,7 @@ export const SettingsView: React.FC = () => {
                 <input
                   type="text"
                   value={city}
-                  onChange={(e) => setCity(e.target.value)}
+                  onChange={(e) => handleFieldEdit(setCity, e.target.value)}
                   disabled={!isAdmin || saving}
                   placeholder="São Paulo"
                   className="w-full bg-[#F8F9FA] border border-[#DCE0D9] rounded-xl px-3.5 py-2.5 text-sm text-[#1E2235] focus:outline-hidden focus:border-[#30334F] focus:bg-white disabled:opacity-70 disabled:cursor-not-allowed"
@@ -436,7 +470,7 @@ export const SettingsView: React.FC = () => {
                 <input
                   type="text"
                   value={state}
-                  onChange={(e) => setState(e.target.value)}
+                  onChange={(e) => handleFieldEdit(setState, e.target.value)}
                   disabled={!isAdmin || saving}
                   maxLength={2}
                   placeholder="SP"
@@ -450,7 +484,7 @@ export const SettingsView: React.FC = () => {
                 <input
                   type="text"
                   value={zipCode}
-                  onChange={(e) => setZipCode(e.target.value)}
+                  onChange={(e) => handleFieldEdit(setZipCode, e.target.value)}
                   disabled={!isAdmin || saving}
                   placeholder="01310-100"
                   className="w-full bg-[#F8F9FA] border border-[#DCE0D9] rounded-xl px-3.5 py-2.5 text-sm text-[#1E2235] focus:outline-hidden focus:border-[#30334F] focus:bg-white disabled:opacity-70 disabled:cursor-not-allowed"
@@ -473,7 +507,7 @@ export const SettingsView: React.FC = () => {
                 <input
                   type="text"
                   value={pixKey}
-                  onChange={(e) => setPixKey(e.target.value)}
+                  onChange={(e) => handleFieldEdit(setPixKey, e.target.value)}
                   disabled={!isAdmin || saving}
                   placeholder="Ex: CNPJ, E-mail, Celular ou Chave Aleatória"
                   className="w-full bg-white border border-[#DCE0D9] rounded-lg px-3 py-2 text-xs text-[#1E2235] font-mono focus:outline-hidden focus:border-[#30334F] disabled:opacity-70 disabled:cursor-not-allowed"
@@ -485,7 +519,7 @@ export const SettingsView: React.FC = () => {
                 </label>
                 <select
                   value={pixKeyType}
-                  onChange={(e) => setPixKeyType(e.target.value)}
+                  onChange={(e) => handleFieldEdit(setPixKeyType, e.target.value)}
                   disabled={!isAdmin || saving}
                   className="w-full bg-white border border-[#DCE0D9] rounded-lg px-3 py-2 text-xs text-[#1E2235] focus:outline-hidden focus:border-[#30334F] disabled:opacity-70 disabled:cursor-not-allowed"
                 >
@@ -507,7 +541,7 @@ export const SettingsView: React.FC = () => {
             <textarea
               rows={2}
               value={receiptFooterMessage}
-              onChange={(e) => setReceiptFooterMessage(e.target.value)}
+              onChange={(e) => handleFieldEdit(setReceiptFooterMessage, e.target.value)}
               disabled={!isAdmin || saving}
               placeholder="Ex: Agradecemos a preferência em nossos serviços de rastreamento veicular!"
               className="w-full bg-[#F8F9FA] border border-[#DCE0D9] rounded-xl px-3.5 py-2 text-xs text-[#1E2235] placeholder-slate-400 focus:outline-hidden focus:border-[#30334F] focus:bg-white resize-none disabled:opacity-70 disabled:cursor-not-allowed"

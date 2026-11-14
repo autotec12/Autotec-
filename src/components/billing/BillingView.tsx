@@ -12,6 +12,7 @@ import {
   formatDate,
   getCurrentMonthStr,
   getTodayIsoDate,
+  getEffectiveCharges,
 } from '../../lib/calculations';
 import {
   Receipt,
@@ -115,8 +116,11 @@ export const BillingView: React.FC<BillingViewProps> = ({ onNavigate }) => {
     }
   };
 
+  // Exclude unpaid individual charges that are already covered by a plan charge in the same competence
+  const effectiveCharges = getEffectiveCharges(charges);
+
   // Filter charges (with individual client filtering support)
-  const filteredCharges = charges
+  const filteredCharges = effectiveCharges
     .filter((c) => {
       // If a specific client is selected, filter strictly by this client's unique ID
       if (selectedBillingClientId && c.clientId !== selectedBillingClientId) {
@@ -148,7 +152,7 @@ export const BillingView: React.FC<BillingViewProps> = ({ onNavigate }) => {
   let monthlyOverdue = 0;
   let monthlyPartialCount = 0;
 
-  charges.forEach((c) => {
+  effectiveCharges.forEach((c) => {
     if (c.referenceMonth === selectedMonth && c.status !== 'cancelado') {
       monthlyEstimated += Number(c.totalAmount) || 0;
       monthlyReceived += Number(c.paidAmount) || 0;
@@ -457,12 +461,19 @@ export const BillingView: React.FC<BillingViewProps> = ({ onNavigate }) => {
                     <tr key={charge.id} className="hover:bg-[#F8F9FB] transition">
                       {/* Client / Vehicle */}
                       <td className="px-4 py-3.5">
-                        <div className="font-bold text-[#30334F] text-sm">{charge.clientName}</div>
-                        <div className="flex items-center gap-2 mt-0.5">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-bold text-[#30334F] text-sm">{charge.clientName}</span>
+                          {charge.isPlanCharge && charge.planName && (
+                            <span className="px-2 py-0.5 rounded-full text-3xs font-black bg-indigo-50 text-indigo-700 border border-indigo-200">
+                              {charge.planName}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                           <span className="font-mono font-bold text-xs bg-[#F3F4F2] px-1.5 py-0.5 rounded text-[#30334F] border border-[#DCE0D9]">
                             {charge.vehiclePlate}
                           </span>
-                          <span className="text-2xs text-slate-500 truncate max-w-[140px]">
+                          <span className="text-2xs text-slate-500 truncate max-w-[180px]">
                             {charge.vehicleModel}
                           </span>
                         </div>
