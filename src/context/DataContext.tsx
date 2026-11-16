@@ -48,6 +48,13 @@ import {
   normalizeIsoDate,
 } from '../lib/calculations';
 
+export interface RefreshDataResult {
+  ok: boolean;
+  error?: string;
+  refreshedAt?: string;
+  failedCollections?: string[];
+}
+
 interface DataContextType {
   clients: Client[];
   vehicles: Vehicle[];
@@ -59,9 +66,11 @@ interface DataContextType {
   loading: boolean;
   hasLoadedOnce: boolean;
   isRefreshing: boolean;
+  activeOperationsCount: number;
+  activeOperationLabel: string | null;
   syncError: string | null;
   retrySync: () => void;
-  refreshData: () => Promise<void>;
+  refreshData: () => Promise<RefreshDataResult>;
   
   // Plan actions
   addPlan: (data: Omit<Plan, 'id' | 'createdAt' | 'updatedAt'>) => Promise<string>;
@@ -286,6 +295,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState(true);
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [activeOperationsCount, setActiveOperationsCount] = useState(0);
+  const [activeOperationLabel, setActiveOperationLabel] = useState<string | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [syncAttempt, setSyncAttempt] = useState(0);
   const [permissionNotice, setPermissionNotice] = useState<string | null>(null);
@@ -294,7 +305,23 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const prevUserUidRef = useRef<string | null>(null);
   const hasLoadedOnceRef = useRef<boolean>(false);
-  const refreshPromiseRef = useRef<Promise<void> | null>(null);
+  const refreshPromiseRef = useRef<Promise<RefreshDataResult> | null>(null);
+
+  const trackOperation = useCallback(async <T,>(label: string, fn: () => Promise<T>): Promise<T> => {
+    setActiveOperationsCount((prev) => prev + 1);
+    setActiveOperationLabel(label);
+    try {
+      return await fn();
+    } finally {
+      setActiveOperationsCount((prev) => {
+        const next = Math.max(0, prev - 1);
+        if (next === 0) {
+          setActiveOperationLabel(null);
+        }
+        return next;
+      });
+    }
+  }, []);
 
   useEffect(() => {
     hasLoadedOnceRef.current = hasLoadedOnce;
@@ -302,22 +329,24 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Non-destructive, read-only manual refresh (Pull to Refresh & post-load sync retry)
   // Keeps all existing state, hasLoadedOnce, and real-time onSnapshot listeners intact.
-  const refreshData = useCallback(async () => {
-    if (!user) return;
+  const refreshData = useCallback(async (): Promise<RefreshDataResult> => {
+    if (!user) {
+      return { ok: false, error: 'Sessão não autenticada.' };
+    }
     if (refreshPromiseRef.current) {
       return refreshPromiseRef.current;
     }
 
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
-      setSyncError(
-        'Sem conexão com a internet. Mantendo os últimos dados válidos carregados em tela.'
-      );
-      return;
+      const offlineMsg = 'Sem conexão com a internet. Mantendo os últimos dados válidos carregados em tela.';
+      setSyncError(offlineMsg);
+      return { ok: false, error: offlineMsg };
     }
 
     setIsRefreshing(true);
 
-    const runRefresh = (async () => {
+    const runRefresh = (async (): Promise<RefreshDataResult> => {
+      let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
       try {
         const auditQuery = query(collection(db, 'audit_logs'), orderBy('timestamp', 'desc'), limit(50));
 
@@ -339,10 +368,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         ]);
 
         const timeoutPromise = new Promise<never>((_, reject) => {
-          setTimeout(() => reject(new Error('SYNC_TIMEOUT')), 10000);
+          timeoutHandle = setTimeout(() => reject(new Error('SYNC_TIMEOUT')), 12000);
         });
 
         const results = await Promise.race([fetchAll, timeoutPromise]);
+        if (timeoutHandle) clearTimeout(timeoutHandle);
         const failedLabels: string[] = [];
 
         // 1. Company Settings
@@ -433,19 +463,34 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         } else failedLabels.push('Registros de Auditoria');
 
         if (failedLabels.length > 0) {
-          setSyncError(
-            `Não foi possível atualizar: ${failedLabels.join(', ')}. Mantendo os últimos dados válidos em tela.`
-          );
-        } else {
-          setSyncError(null);
-          setPermissionNotice(null);
+          const partialError = `Não foi possível atualizar: ${failedLabels.join(', ')}. Mantendo os últimos dados válidos em tela.`;
+          setSyncError(partialError);
+          return {
+            ok: false,
+            error: partialError,
+            failedCollections: failedLabels,
+          };
         }
-      } catch (err) {
+
+        setSyncError(null);
+        setPermissionNotice(null);
+        return {
+          ok: true,
+          refreshedAt: new Date().toISOString(),
+        };
+      } catch (err: any) {
         console.warn('Manual refresh notice:', err);
-        setSyncError(
-          'Não foi possível concluir a atualização com o Cloud Firestore. Mantendo os últimos dados válidos em tela.'
-        );
+        const errorMsg =
+          err?.message === 'SYNC_TIMEOUT'
+            ? 'Tempo limite excedido ao consultar o Cloud Firestore. Mantendo os últimos dados válidos em tela.'
+            : 'Não foi possível concluir a atualização com o Cloud Firestore. Mantendo os últimos dados válidos em tela.';
+        setSyncError(errorMsg);
+        return {
+          ok: false,
+          error: errorMsg,
+        };
       } finally {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
         refreshPromiseRef.current = null;
         setIsRefreshing(false);
       }
@@ -2837,6 +2882,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const tracked = <A extends any[], R>(label: string, fn: (...args: A) => Promise<R>) => {
+    return (...args: A): Promise<R> => trackOperation(label, () => fn(...args));
+  };
+
   return (
     <DataContext.Provider
       value={{
@@ -2850,69 +2899,71 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         loading,
         hasLoadedOnce,
         isRefreshing,
+        activeOperationsCount,
+        activeOperationLabel,
         syncError,
         retrySync,
         refreshData,
-        addPlan,
-        updatePlan,
-        deletePlan,
-        togglePlanStatus,
-        seedDefaultPlans,
-        assignPlanToClient,
-        addClient,
-        updateClient,
-        deleteClient,
-        addVehicle,
-        updateVehicle,
-        deleteVehicle,
-        addCharge,
-        updateCharge,
-        deleteCharge,
-        postponeCharge,
-        generateMonthlyCharges,
-        recordPayment,
-        recordConsolidatedPayment,
+        addPlan: tracked('Salvando plano', addPlan),
+        updatePlan: tracked('Atualizando plano', updatePlan),
+        deletePlan: tracked('Excluindo plano', deletePlan),
+        togglePlanStatus: tracked('Atualizando status do plano', togglePlanStatus),
+        seedDefaultPlans: tracked('Carregando planos padrão', seedDefaultPlans),
+        assignPlanToClient: tracked('Vinculando plano', assignPlanToClient),
+        addClient: tracked('Cadastrando cliente', addClient),
+        updateClient: tracked('Atualizando cliente', updateClient),
+        deleteClient: tracked('Excluindo cliente', deleteClient),
+        addVehicle: tracked('Cadastrando veículo', addVehicle),
+        updateVehicle: tracked('Atualizando veículo', updateVehicle),
+        deleteVehicle: tracked('Excluindo veículo', deleteVehicle),
+        addCharge: tracked('Gerando mensalidade', addCharge),
+        updateCharge: tracked('Atualizando mensalidade', updateCharge),
+        deleteCharge: tracked('Excluindo mensalidade', deleteCharge),
+        postponeCharge: tracked('Adiando mensalidade', postponeCharge),
+        generateMonthlyCharges: tracked('Gerando mensalidades do mês', generateMonthlyCharges),
+        recordPayment: tracked('Registrando recebimento', recordPayment),
+        recordConsolidatedPayment: tracked('Registrando recebimento consolidado', recordConsolidatedPayment),
         technicalServices,
-        addTechnicalService,
-        updateTechnicalService,
-        deleteTechnicalService,
+        addTechnicalService: tracked('Registrando serviço técnico', addTechnicalService),
+        updateTechnicalService: tracked('Atualizando serviço técnico', updateTechnicalService),
+        deleteTechnicalService: tracked('Excluindo serviço técnico', deleteTechnicalService),
         technicians,
-        addTechnician,
-        updateTechnician,
-        deleteTechnician,
-        toggleTechnicianStatus,
+        addTechnician: tracked('Cadastrando técnico', addTechnician),
+        updateTechnician: tracked('Atualizando técnico', updateTechnician),
+        deleteTechnician: tracked('Excluindo técnico', deleteTechnician),
+        toggleTechnicianStatus: tracked('Atualizando técnico', toggleTechnicianStatus),
         technicianPayments,
-        recordTechnicianPayment,
-        cancelTechnicianPayment,
+        recordTechnicianPayment: tracked('Registrando pagamento ao técnico', recordTechnicianPayment),
+        cancelTechnicianPayment: tracked('Cancelando pagamento ao técnico', cancelTechnicianPayment),
         technicalServiceTypes,
-        addTechnicalServiceType,
-        updateTechnicalServiceType,
-        deleteTechnicalServiceType,
-        toggleTechnicalServiceTypeStatus,
+        addTechnicalServiceType: tracked('Salvando tipo de serviço', addTechnicalServiceType),
+        updateTechnicalServiceType: tracked('Atualizando tipo de serviço', updateTechnicalServiceType),
+        deleteTechnicalServiceType: tracked('Excluindo tipo de serviço', deleteTechnicalServiceType),
+        toggleTechnicalServiceTypeStatus: tracked('Atualizando tipo de serviço', toggleTechnicalServiceTypeStatus),
         companyExpenses,
-        addCompanyExpense,
-        updateCompanyExpense,
-        deleteCompanyExpense,
+        addCompanyExpense: tracked('Registrando despesa', addCompanyExpense),
+        updateCompanyExpense: tracked('Atualizando despesa', updateCompanyExpense),
+        deleteCompanyExpense: tracked('Excluindo despesa', deleteCompanyExpense),
         customExpenseCategories,
-        addExpenseCategory,
-        updateExpenseCategory,
-        deleteExpenseCategory,
-        toggleExpenseCategoryStatus,
+        addExpenseCategory: tracked('Salvando categoria de despesa', addExpenseCategory),
+        updateExpenseCategory: tracked('Atualizando categoria de despesa', updateExpenseCategory),
+        deleteExpenseCategory: tracked('Excluindo categoria de despesa', deleteExpenseCategory),
+        toggleExpenseCategoryStatus: tracked('Atualizando categoria de despesa', toggleExpenseCategoryStatus),
         fixedExpenses,
-        addFixedExpense,
-        updateFixedExpense,
-        pauseFixedExpense,
-        resumeFixedExpense,
-        closeFixedExpense,
-        deleteFixedExpense,
-        generateFixedExpenseOccurrences,
+        addFixedExpense: tracked('Salvando despesa fixa', addFixedExpense),
+        updateFixedExpense: tracked('Atualizando despesa fixa', updateFixedExpense),
+        pauseFixedExpense: tracked('Pausando despesa fixa', pauseFixedExpense),
+        resumeFixedExpense: tracked('Reativando despesa fixa', resumeFixedExpense),
+        closeFixedExpense: tracked('Encerrando despesa fixa', closeFixedExpense),
+        deleteFixedExpense: tracked('Excluindo despesa fixa', deleteFixedExpense),
+        generateFixedExpenseOccurrences: tracked('Gerando despesas fixas', generateFixedExpenseOccurrences),
         selectedDetailItem,
         setSelectedDetailItem,
         selectedBillingClientId,
         setSelectedBillingClientId,
         permissionNotice,
-        updateCompanySettings,
-        seedDemoData,
+        updateCompanySettings: tracked('Salvando configurações', updateCompanySettings),
+        seedDemoData: tracked('Gerando dados de exemplo', seedDemoData),
       }}
     >
       {children}

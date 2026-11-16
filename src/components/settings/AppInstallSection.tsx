@@ -11,15 +11,27 @@ import {
   ExternalLink,
   ShieldCheck,
   Zap,
+  RefreshCw,
+  Loader2,
 } from 'lucide-react';
+import { useAppUpdate } from '../../context/AppUpdateContext';
 
 export const AppInstallSection: React.FC = () => {
+  const {
+    currentVersion,
+    latestVersion,
+    updateAvailable,
+    isChecking,
+    checkForUpdates,
+    applyUpdate,
+  } = useAppUpdate();
   const [isStandalone, setIsStandalone] = useState(false);
   const [isIOS, setIsIOS] = useState(false);
   const [isAndroid, setIsAndroid] = useState(false);
   const [isSafari, setIsSafari] = useState(false);
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [installSuccess, setInstallSuccess] = useState(false);
+  const [manualCheckFeedback, setManualCheckFeedback] = useState<string | null>(null);
 
   useEffect(() => {
     // 1. Detect standalone (installed PWA) mode
@@ -107,8 +119,73 @@ export const AppInstallSection: React.FC = () => {
           <div>
             <div className="text-xs font-black text-white">AUTOTEC</div>
             <div className="text-2xs text-slate-300">Gestão Financeira</div>
-            <div className="text-2xs text-[#F28C1B] font-semibold mt-0.5">Versão PWA 2.0</div>
+            <div className="text-2xs text-[#F28C1B] font-mono font-semibold mt-0.5">
+              Versão {currentVersion}
+            </div>
           </div>
+        </div>
+      </div>
+
+      {/* App Version & Controlled Update Card */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="space-y-1">
+          <h4 className="text-sm font-black text-[#30334F] flex items-center gap-2">
+            <RefreshCw className="w-4 h-4 text-[#F28C1B]" />
+            Atualizações do Aplicativo (PWA)
+          </h4>
+          <p className="text-xs text-slate-600">
+            Versão instalada: <strong className="font-mono text-[#30334F]">{currentVersion}</strong>
+            {updateAvailable && latestVersion && (
+              <span className="ml-2 text-[#C86905] font-bold">
+                • Nova versão disponível ({latestVersion})
+              </span>
+            )}
+          </p>
+          {manualCheckFeedback && (
+            <p className="text-[11px] font-medium text-[#5F647E]">{manualCheckFeedback}</p>
+          )}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <button
+            type="button"
+            disabled={isChecking}
+            onClick={async () => {
+              setManualCheckFeedback(null);
+              const res = await checkForUpdates();
+              if (res.found) {
+                setManualCheckFeedback(
+                  `Nova versão detectada${res.remoteVersion ? ` (${res.remoteVersion})` : ''}. Clique em "Atualizar agora" quando finalizar seu trabalho.`
+                );
+              } else {
+                setManualCheckFeedback('Você já está utilizando a versão mais recente publicada.');
+              }
+            }}
+            className="autotec-btn-secondary text-xs"
+          >
+            {isChecking ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-[#F28C1B]" />
+                <span>Verificando...</span>
+              </>
+            ) : (
+              <>
+                <RefreshCw className="w-3.5 h-3.5 text-[#30334F]" />
+                <span>Verificar nova versão</span>
+              </>
+            )}
+          </button>
+
+          {updateAvailable && (
+            <button
+              type="button"
+              onClick={() => void applyUpdate()}
+              className="autotec-btn-orange text-xs"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Atualizar agora</span>
+            </button>
+          )}
         </div>
       </div>
 

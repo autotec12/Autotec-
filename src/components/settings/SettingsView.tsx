@@ -235,7 +235,11 @@ export const SettingsView: React.FC = () => {
 
       {/* TAB 1: DADOS DA EMPRESA */}
       {activeTab === 'empresa' && (
-        <form onSubmit={handleSubmit} className="bg-white border border-[#E2E4E0] rounded-2xl p-6 shadow-xs space-y-6">
+        <form
+          onSubmit={handleSubmit}
+          data-dirty-form={isDirty ? 'true' : undefined}
+          className="bg-white border border-[#E2E4E0] rounded-2xl p-6 shadow-xs space-y-6"
+        >
           {hasPendingRemoteUpdate && isDirty && (
             <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 font-medium flex flex-wrap items-center justify-between gap-2">
               <span>As configurações foram atualizadas no Firestore enquanto você editava. Suas alterações locais foram preservadas.</span>

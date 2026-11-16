@@ -20,15 +20,6 @@
   </head>
   <body class="bg-[#F3F4F2] text-[#1E2235] antialiased selection:bg-[#F28C1B] selection:text-white min-h-screen">
     <div id="root"></div>
-    <script>
-      if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/sw.js').catch((err) => {
-            console.log('SW registration notice:', err);
-          });
-        });
-      }
-    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

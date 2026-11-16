@@ -7,8 +7,10 @@ import React, { useState } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { SecurityProvider, useSecurity } from './context/SecurityContext';
 import { DataProvider, useData } from './context/DataContext';
+import { AppUpdateProvider, useAppUpdate } from './context/AppUpdateContext';
 import { Navigation } from './components/layout/Navigation';
 import { PullToRefresh } from './components/layout/PullToRefresh';
+import { AppUpdateBanner } from './components/layout/AppUpdateBanner';
 import { GeneralManagementView } from './components/general/GeneralManagementView';
 import { DashboardView } from './components/dashboard/DashboardView';
 import { ClientsView } from './components/clients/ClientsView';
@@ -51,6 +53,7 @@ function MainApp() {
     retrySync,
     refreshData,
   } = useData();
+  const { currentVersion, updateAvailable, isDeferred, reopenUpdatePrompt } = useAppUpdate();
 
   // Persist active view in localStorage so the screen never resets unexpectedly
   const [currentView, setCurrentView] = useState<string>(() => {
@@ -114,6 +117,9 @@ function MainApp() {
     <div className="min-h-screen bg-[#F3F4F2] text-[#1E2235] flex flex-col selection:bg-[#F28C1B] selection:text-white notranslate" translate="no">
       {/* Navigation Header */}
       <Navigation currentView={currentView} onNavigate={handleNavigate} />
+
+      {/* Controlled PWA App Version Update Banner (strictly independent from data Pull-to-Refresh) */}
+      <AppUpdateBanner />
 
       {/* Sync error banner after initial load (preserves loaded data on screen) */}
       {hasLoadedOnce && syncError && (
@@ -210,8 +216,20 @@ function MainApp() {
       </PullToRefresh>
 
       {/* Footer */}
-      <footer className="border-t border-[#E2E4E0] bg-white py-4 text-center text-xs text-[#5F647E]">
-        AUTOTEC Rastreamento Veicular • Sistema Integrado de Gestão Financeira • Mensalidades, Serviços e Gastos • autotec-476bb
+      <footer className="border-t border-[#E2E4E0] bg-white py-4 px-4 text-center text-xs text-[#5F647E] flex flex-wrap items-center justify-center gap-x-3 gap-y-1.5">
+        <span>
+          AUTOTEC Rastreamento Veicular • Sistema Integrado de Gestão Financeira • Versão{' '}
+          <span className="font-mono text-[#30334F]">{currentVersion}</span>
+        </span>
+        {updateAvailable && isDeferred && (
+          <button
+            type="button"
+            onClick={reopenUpdatePrompt}
+            className="px-2.5 py-0.5 rounded-lg bg-[#FFF5EB] hover:bg-[#FDE9D2] border border-[#FCD9B3] text-[#C86905] text-[11px] font-bold transition cursor-pointer"
+          >
+            Nova versão disponível • Atualizar
+          </button>
+        )}
       </footer>
     </div>
   );
@@ -222,7 +240,9 @@ export default function App() {
     <AuthProvider>
       <SecurityProvider>
         <DataProvider>
-          <MainApp />
+          <AppUpdateProvider>
+            <MainApp />
+          </AppUpdateProvider>
         </DataProvider>
       </SecurityProvider>
     </AuthProvider>
