@@ -42,7 +42,31 @@ export function formatDateTime(dateStr: string | undefined | null): string {
   return dateStr;
 }
 
+export function normalizeIsoDate(dateStr?: string | null): string {
+  if (!dateStr || typeof dateStr !== 'string') return '';
+  const trimmed = dateStr.trim();
+  if (!trimmed) return '';
+  const isoMatch = trimmed.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (isoMatch) return isoMatch[1];
+  const brMatch = trimmed.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+  if (brMatch) return `${brMatch[3]}-${brMatch[2]}-${brMatch[1]}`;
+  return trimmed;
+}
+
 export function getTodayIsoDate(): string {
+  try {
+    const formatted = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Fortaleza',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date());
+    if (/^\d{4}-\d{2}-\d{2}$/.test(formatted)) {
+      return formatted;
+    }
+  } catch {
+    // fallback para data local se Intl com timeZone não estiver disponível
+  }
   const now = new Date();
   const year = now.getFullYear();
   const month = String(now.getMonth() + 1).padStart(2, '0');
@@ -51,28 +75,28 @@ export function getTodayIsoDate(): string {
 }
 
 export function getCurrentMonthStr(): string {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  return `${year}-${month}`;
+  return getTodayIsoDate().slice(0, 7);
 }
 
 export function isDateOverdue(dueDate: string): boolean {
-  if (!dueDate) return false;
+  const normalized = normalizeIsoDate(dueDate);
+  if (!normalized) return false;
   const today = getTodayIsoDate();
-  return dueDate < today;
+  return normalized < today;
 }
 
 export function isDateToday(dueDate: string): boolean {
-  if (!dueDate) return false;
+  const normalized = normalizeIsoDate(dueDate);
+  if (!normalized) return false;
   const today = getTodayIsoDate();
-  return dueDate === today;
+  return normalized === today;
 }
 
 export function getDaysDifference(dueDate: string): number {
-  if (!dueDate) return 0;
+  const normalized = normalizeIsoDate(dueDate);
+  if (!normalized) return 0;
   const today = new Date(getTodayIsoDate() + 'T00:00:00');
-  const target = new Date(dueDate.split('T')[0] + 'T00:00:00');
+  const target = new Date(normalized + 'T00:00:00');
   const diffTime = target.getTime() - today.getTime();
   return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 }
@@ -382,10 +406,145 @@ export function isCompetenceEligibleForClient(
 export function getEffectiveBillingMonth(
   charge: Pick<Charge, 'referenceMonth' | 'isPostponed' | 'dueDate'>
 ): string {
-  if (charge.isPostponed && charge.dueDate && /^\d{4}-\d{2}-\d{2}/.test(charge.dueDate)) {
-    return charge.dueDate.slice(0, 7);
+  const normalizedDue = normalizeIsoDate(charge.dueDate);
+  if (charge.isPostponed && /^\d{4}-\d{2}-\d{2}$/.test(normalizedDue)) {
+    return normalizedDue.slice(0, 7);
   }
   return charge.referenceMonth;
+}
+
+/**
+ * Calcula o saldo restante efetivo da cobrança com fallback seguro caso
+ * remainingBalance não esteja preenchido ou esteja ausente no documento.
+ */
+export function getChargeRemainingBalance(
+  charge: Pick<Charge, 'remainingBalance' | 'totalAmount' | 'paidAmount'>
+): number {
+  const rawRemaining = charge.remainingBalance as unknown;
+  if (
+    rawRemaining !== undefined &&
+    rawRemaining !== null &&
+    rawRemaining !== '' &&
+    !Number.isNaN(Number(rawRemaining))
+  ) {
+    return Math.max(0, Number(rawRemaining));
+  }
+  const total = Number(charge.totalAmount) || 0;
+  const paid = Number(charge.paidAmount) || 0;
+  return Math.max(0, total - paid);
+}
+
+/**
+ * Regra única e centralizada de elegibilidade para "Adiar mensalidade"
+ * (usada tanto pela interface quanto pela função de execução do adiamento):
+ * 1. Vencimento igual ou anterior à data atual (America/Fortaleza)
+ * 2. Status pendente ou parcial (não quitada e não cancelada)
+ * 3. Saldo restante maior que zero
+ */
+export function getPostponeEligibility(
+  charge: Pick<Charge, 'status' | 'remainingBalance' | 'totalAmount' | 'paidAmount' | 'dueDate'>,
+  referenceToday?: string
+): { allowed: boolean; reason?: string } {
+  const today = normalizeIsoDate(referenceToday) || getTodayIsoDate();
+  const normalizedStatus = String(charge.status || '').trim().toLowerCase();
+  const remaining = getChargeRemainingBalance(charge);
+  const effectiveDueDate = normalizeIsoDate(charge.dueDate);
+
+  if (normalizedStatus === 'cancelado') {
+    return { allowed: false, reason: 'Não é possível adiar uma mensalidade cancelada.' };
+  }
+
+  if (normalizedStatus === 'pago' || remaining <= 0.009) {
+    return {
+      allowed: false,
+      reason: 'Não é possível adiar uma mensalidade já quitada ou sem saldo devedor.',
+    };
+  }
+
+  if (normalizedStatus !== 'pendente' && normalizedStatus !== 'parcial') {
+    return {
+      allowed: false,
+      reason: 'Apenas mensalidades pendentes ou parcialmente pagas podem ser adiadas.',
+    };
+  }
+
+  if (!effectiveDueDate || !/^\d{4}-\d{2}-\d{2}$/.test(effectiveDueDate)) {
+    return {
+      allowed: false,
+      reason: 'Mensalidade sem data de vencimento válida para adiamento.',
+    };
+  }
+
+  if (effectiveDueDate > today) {
+    return {
+      allowed: false,
+      reason: 'Apenas mensalidades vencidas ou com vencimento hoje podem ser adiadas.',
+    };
+  }
+
+  return { allowed: true };
+}
+
+export function canPostponeCharge(
+  charge: Pick<Charge, 'status' | 'remainingBalance' | 'totalAmount' | 'paidAmount' | 'dueDate'>,
+  referenceToday?: string
+): boolean {
+  return getPostponeEligibility(charge, referenceToday).allowed;
+}
+
+/**
+ * Ordena a lista exibida de mensalidades sem alterar os objetos originais:
+ * 1. Vencidas em aberto (mais antigas primeiro — ordem crescente de vencimento efetivo)
+ * 2. Vencimento hoje em aberto
+ * 3. A vencer em aberto (mais próximas primeiro — ordem crescente de vencimento efetivo)
+ * 4. Quitadas / canceladas / sem saldo (mais recentes primeiro)
+ * Empates de data mantêm ordenação determinística e estável.
+ */
+export function sortChargesByPriority(
+  chargesList: Charge[],
+  referenceToday?: string
+): Charge[] {
+  const today = normalizeIsoDate(referenceToday) || getTodayIsoDate();
+
+  const getTier = (c: Charge): 0 | 1 | 2 | 3 => {
+    const status = String(c.status || '').trim().toLowerCase();
+    const remaining = getChargeRemainingBalance(c);
+    const isOpen = (status === 'pendente' || status === 'parcial') && remaining > 0.009;
+    if (!isOpen) return 3;
+
+    const effectiveDue = normalizeIsoDate(c.dueDate);
+    if (!effectiveDue) return 2;
+    if (effectiveDue < today) return 0;
+    if (effectiveDue === today) return 1;
+    return 2;
+  };
+
+  return [...chargesList].sort((a, b) => {
+    const tierA = getTier(a);
+    const tierB = getTier(b);
+    if (tierA !== tierB) return tierA - tierB;
+
+    const dueA = normalizeIsoDate(a.dueDate);
+    const dueB = normalizeIsoDate(b.dueDate);
+
+    if (dueA !== dueB) {
+      if (tierA === 3) {
+        return dueB.localeCompare(dueA);
+      }
+      return dueA.localeCompare(dueB);
+    }
+
+    const clientCmp = (a.clientName || '').localeCompare(b.clientName || '', 'pt-BR');
+    if (clientCmp !== 0) return clientCmp;
+
+    const refCmp = (a.referenceMonth || '').localeCompare(b.referenceMonth || '');
+    if (refCmp !== 0) return refCmp;
+
+    const plateCmp = (a.vehiclePlate || '').localeCompare(b.vehiclePlate || '');
+    if (plateCmp !== 0) return plateCmp;
+
+    return (a.id || '').localeCompare(b.id || '');
+  });
 }
 
 /**

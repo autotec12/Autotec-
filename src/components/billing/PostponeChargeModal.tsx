@@ -7,6 +7,8 @@ import {
   formatDateTime,
   getCompetenceLabel,
   getSafeDueDate,
+  normalizeIsoDate,
+  getChargeRemainingBalance,
 } from '../../lib/calculations';
 import { CalendarClock, X, Check, AlertCircle, History, Layers, Car } from 'lucide-react';
 
@@ -43,14 +45,16 @@ export const PostponeChargeModal: React.FC<PostponeChargeModalProps> = ({
 }) => {
   const { postponeCharge } = useData();
 
-  const [newDueDate, setNewDueDate] = useState<string>(() => addOneMonthIso(charge.dueDate));
+  const currentDueDate = normalizeIsoDate(charge.dueDate);
+  const effectiveRemaining = getChargeRemainingBalance(charge);
+  const [newDueDate, setNewDueDate] = useState<string>(() => addOneMonthIso(currentDueDate));
   const [reason, setReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const originalDueDate = charge.originalDueDate || charge.dueDate;
+  const originalDueDate = normalizeIsoDate(charge.originalDueDate) || currentDueDate;
   const history = charge.postponementHistory || [];
-  const isEarlierThanCurrent = Boolean(newDueDate && newDueDate < charge.dueDate);
+  const isEarlierThanCurrent = Boolean(newDueDate && newDueDate < currentDueDate);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -60,7 +64,7 @@ export const PostponeChargeModal: React.FC<PostponeChargeModalProps> = ({
       return;
     }
 
-    if (newDueDate === charge.dueDate) {
+    if (newDueDate === currentDueDate) {
       setError('Escolha uma nova data diferente do vencimento atual.');
       return;
     }
@@ -153,7 +157,7 @@ export const PostponeChargeModal: React.FC<PostponeChargeModalProps> = ({
                   {getCompetenceLabel(charge.referenceMonth)}
                 </span>
                 <span className="text-2xs text-slate-500 block">
-                  Saldo em aberto: <strong className="text-[#F28C1B]">{formatCurrency(charge.remainingBalance)}</strong>
+                  Saldo em aberto: <strong className="text-[#F28C1B]">{formatCurrency(effectiveRemaining)}</strong>
                 </span>
               </div>
             </div>
@@ -161,9 +165,9 @@ export const PostponeChargeModal: React.FC<PostponeChargeModalProps> = ({
             <div className="pt-2 border-t border-[#E2E4E0] flex flex-wrap items-center justify-between gap-2 text-xs">
               <div>
                 <span className="text-slate-500">Vencimento atual: </span>
-                <strong className="text-[#30334F]">{formatDate(charge.dueDate)}</strong>
+                <strong className="text-[#30334F]">{formatDate(currentDueDate)}</strong>
               </div>
-              {charge.isPostponed && originalDueDate !== charge.dueDate && (
+              {charge.isPostponed && originalDueDate !== currentDueDate && (
                 <span className="text-2xs text-amber-800 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md font-semibold">
                   Original: {formatDate(originalDueDate)}
                 </span>
@@ -189,30 +193,30 @@ export const PostponeChargeModal: React.FC<PostponeChargeModalProps> = ({
               <span className="text-2xs font-semibold text-slate-500">Atalhos:</span>
               <button
                 type="button"
-                onClick={() => setNewDueDate(addDaysIso(charge.dueDate, 7))}
+                onClick={() => setNewDueDate(addDaysIso(currentDueDate, 7))}
                 className="px-2.5 py-1 text-2xs font-bold bg-[#F3F4F2] hover:bg-slate-200 text-[#30334F] rounded-lg border border-[#DCE0D9] transition cursor-pointer"
               >
                 +7 dias
               </button>
               <button
                 type="button"
-                onClick={() => setNewDueDate(addDaysIso(charge.dueDate, 15))}
+                onClick={() => setNewDueDate(addDaysIso(currentDueDate, 15))}
                 className="px-2.5 py-1 text-2xs font-bold bg-[#F3F4F2] hover:bg-slate-200 text-[#30334F] rounded-lg border border-[#DCE0D9] transition cursor-pointer"
               >
                 +15 dias
               </button>
               <button
                 type="button"
-                onClick={() => setNewDueDate(addOneMonthIso(charge.dueDate))}
+                onClick={() => setNewDueDate(addOneMonthIso(currentDueDate))}
                 className="px-2.5 py-1 text-2xs font-bold bg-amber-50 hover:bg-amber-100 text-amber-900 rounded-lg border border-amber-200 transition cursor-pointer"
               >
-                +1 mês ({formatDate(addOneMonthIso(charge.dueDate))})
+                +1 mês ({formatDate(addOneMonthIso(currentDueDate))})
               </button>
             </div>
 
             {isEarlierThanCurrent && (
               <p className="mt-2 text-2xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 font-medium">
-                Atenção: a data selecionada ({formatDate(newDueDate)}) é anterior ao vencimento atual ({formatDate(charge.dueDate)}).
+                Atenção: a data selecionada ({formatDate(newDueDate)}) é anterior ao vencimento atual ({formatDate(currentDueDate)}).
               </p>
             )}
           </div>

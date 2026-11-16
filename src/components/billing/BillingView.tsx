@@ -15,6 +15,10 @@ import {
   getTodayIsoDate,
   getEffectiveCharges,
   getEffectiveBillingMonth,
+  normalizeIsoDate,
+  getChargeRemainingBalance,
+  canPostponeCharge,
+  sortChargesByPriority,
 } from '../../lib/calculations';
 import {
   Receipt,
@@ -101,11 +105,18 @@ export const BillingView: React.FC<BillingViewProps> = ({ onNavigate }) => {
 
   const clientTotalBilled = clientAllCharges.reduce((acc, c) => acc + (Number(c.totalAmount) || 0), 0);
   const clientTotalPaid = clientAllCharges.reduce((acc, c) => acc + (Number(c.paidAmount) || 0), 0);
-  const clientTotalPending = clientAllCharges.reduce((acc, c) => acc + (Number(c.remainingBalance) || 0), 0);
-  const clientOverdueCount = clientAllCharges.filter((c) => c.remainingBalance > 0 && c.dueDate < today).length;
+  const clientTotalPending = clientAllCharges.reduce((acc, c) => acc + getChargeRemainingBalance(c), 0);
+  const clientOverdueCount = clientAllCharges.filter((c) => {
+    const remaining = getChargeRemainingBalance(c);
+    const due = normalizeIsoDate(c.dueDate);
+    return c.status !== 'pago' && remaining > 0.009 && Boolean(due) && due < today;
+  }).length;
   const clientPaidCount = clientAllCharges.filter((c) => c.status === 'pago').length;
   const clientPartialCount = clientAllCharges.filter((c) => c.status === 'parcial').length;
-  const clientPendingCount = clientAllCharges.filter((c) => c.status === 'pendente' && c.dueDate >= today).length;
+  const clientPendingCount = clientAllCharges.filter((c) => {
+    const due = normalizeIsoDate(c.dueDate);
+    return c.status === 'pendente' && (!due || due >= today);
+  }).length;
 
   // Monthly batch generator handler
   const handleGenerateMonthly = async () => {
@@ -127,9 +138,9 @@ export const BillingView: React.FC<BillingViewProps> = ({ onNavigate }) => {
   // Exclude unpaid individual charges that are already covered by a plan charge in the same competence
   const effectiveCharges = getEffectiveCharges(charges);
 
-  // Filter charges (with individual client filtering support)
-  const filteredCharges = effectiveCharges
-    .filter((c) => {
+  // Filter charges (with individual client filtering support) and apply automatic priority ordering
+  const filteredCharges = sortChargesByPriority(
+    effectiveCharges.filter((c) => {
       // If a specific client is selected, filter strictly by this client's unique ID
       if (selectedBillingClientId && c.clientId !== selectedBillingClientId) {
         return false;
@@ -142,7 +153,14 @@ export const BillingView: React.FC<BillingViewProps> = ({ onNavigate }) => {
         c.vehiclePlate.toLowerCase().includes(searchTerm.toLowerCase()) ||
         c.vehicleModel.toLowerCase().includes(searchTerm.toLowerCase());
 
-      const isOverdue = c.remainingBalance > 0 && c.dueDate < today;
+      const remaining = getChargeRemainingBalance(c);
+      const normalizedDue = normalizeIsoDate(c.dueDate);
+      const isOverdue =
+        c.status !== 'pago' &&
+        c.status !== 'cancelado' &&
+        remaining > 0.009 &&
+        Boolean(normalizedDue) &&
+        normalizedDue < today;
 
       let matchesStatus = true;
       if (statusFilter === 'pago') matchesStatus = c.status === 'pago';
@@ -151,8 +169,9 @@ export const BillingView: React.FC<BillingViewProps> = ({ onNavigate }) => {
       else if (statusFilter === 'atrasado') matchesStatus = isOverdue;
 
       return matchesMonth && matchesSearch && matchesStatus;
-    })
-    .sort((a, b) => (b.dueDate || '').localeCompare(a.dueDate || ''));
+    }),
+    today
+  );
 
   // Calculate monthly summary indicators for selected month
   let monthlyEstimated = 0;
@@ -163,15 +182,17 @@ export const BillingView: React.FC<BillingViewProps> = ({ onNavigate }) => {
 
   effectiveCharges.forEach((c) => {
     if (getEffectiveBillingMonth(c) === selectedMonth && c.status !== 'cancelado') {
+      const remaining = getChargeRemainingBalance(c);
+      const normalizedDue = normalizeIsoDate(c.dueDate);
       monthlyEstimated += Number(c.totalAmount) || 0;
       monthlyReceived += Number(c.paidAmount) || 0;
-      if (c.remainingBalance > 0) {
-        monthlyPending += Number(c.remainingBalance) || 0;
-        if (c.dueDate < today) {
-          monthlyOverdue += Number(c.remainingBalance) || 0;
+      if (remaining > 0) {
+        monthlyPending += remaining;
+        if (normalizedDue && normalizedDue < today) {
+          monthlyOverdue += remaining;
         }
       }
-      if (c.status === 'parcial' && c.remainingBalance > 0) {
+      if (c.status === 'parcial' && remaining > 0) {
         monthlyPartialCount++;
       }
     }
@@ -489,8 +510,16 @@ export const BillingView: React.FC<BillingViewProps> = ({ onNavigate }) => {
               </thead>
               <tbody className="divide-y divide-[#E2E4E0]">
                 {filteredCharges.map((charge) => {
-                  const isOverdue = charge.remainingBalance > 0 && charge.dueDate < today;
-                  const isToday = charge.remainingBalance > 0 && charge.dueDate === today;
+                  const remaining = getChargeRemainingBalance(charge);
+                  const normalizedDue = normalizeIsoDate(charge.dueDate);
+                  const normalizedStatus = String(charge.status || '').trim().toLowerCase();
+                  const isOpenCharge =
+                    normalizedStatus !== 'pago' &&
+                    normalizedStatus !== 'cancelado' &&
+                    remaining > 0.009;
+                  const isOverdue = isOpenCharge && Boolean(normalizedDue) && normalizedDue < today;
+                  const isToday = isOpenCharge && normalizedDue === today;
+                  const isEligibleForPostpone = canPostponeCharge(charge, today);
                   const client = clientMap.get(charge.clientId);
                   const vehicle = vehicleMap.get(charge.vehicleId);
 
@@ -605,7 +634,7 @@ export const BillingView: React.FC<BillingViewProps> = ({ onNavigate }) => {
 
                       {/* Remaining balance (Melhoria visual dos valores pendentes) */}
                       <td className="px-4 py-3.5">
-                        {charge.remainingBalance > 0.009 ? (
+                        {remaining > 0.009 ? (
                           <div className="space-y-1">
                             <span
                               className={`inline-flex items-center gap-1 text-2xs px-2.5 py-1 rounded-lg font-black shadow-2xs ${
@@ -619,7 +648,7 @@ export const BillingView: React.FC<BillingViewProps> = ({ onNavigate }) => {
                               ) : (
                                 <Clock className="w-3.5 h-3.5 text-amber-700 shrink-0" />
                               )}
-                              {formatCurrency(charge.remainingBalance)}
+                              {formatCurrency(remaining)}
                             </span>
                             {charge.status === 'parcial' && (
                               <div className="text-3xs text-amber-800 font-bold">
@@ -677,8 +706,8 @@ export const BillingView: React.FC<BillingViewProps> = ({ onNavigate }) => {
                       {/* Actions */}
                       <td className="px-4 py-3.5 text-right">
                         <div className="flex items-center justify-end gap-1.5">
-                          {/* Payment Button */}
-                          {charge.remainingBalance > 0.009 ? (
+                          {/* Payment & Postpone Buttons */}
+                          {isOpenCharge ? (
                             <>
                               <button
                                 onClick={() => setChargeForPayment(charge)}
@@ -688,7 +717,7 @@ export const BillingView: React.FC<BillingViewProps> = ({ onNavigate }) => {
                                 <DollarSign className="w-3.5 h-3.5" />
                                 Baixar
                               </button>
-                              {charge.status !== 'pago' && charge.status !== 'cancelado' && (
+                              {isEligibleForPostpone && (
                                 <button
                                   type="button"
                                   onClick={() => setChargeToPostpone(charge)}

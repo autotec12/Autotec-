@@ -44,6 +44,8 @@ import {
   getCompetenceLabel,
   formatDate,
   planMonthlyCharges,
+  getPostponeEligibility,
+  normalizeIsoDate,
 } from '../lib/calculations';
 
 interface DataContextType {
@@ -1222,25 +1224,23 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       throw new Error('Mensalidade não encontrada.');
     }
 
-    if (charge.status === 'pago' || (Number(charge.remainingBalance) || 0) <= 0.009) {
-      throw new Error('Não é possível adiar uma mensalidade já quitada.');
+    const eligibility = getPostponeEligibility(charge);
+    if (!eligibility.allowed) {
+      throw new Error(eligibility.reason || 'Esta mensalidade não pode ser adiada.');
     }
 
-    if (charge.status === 'cancelado') {
-      throw new Error('Não é possível adiar uma mensalidade cancelada.');
-    }
-
-    const normalizedNewDate = (newDueDate || '').trim();
+    const currentDueDate = normalizeIsoDate(charge.dueDate);
+    const normalizedNewDate = normalizeIsoDate(newDueDate);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(normalizedNewDate)) {
       throw new Error('Informe uma data válida para o adiamento (dia, mês e ano).');
     }
 
-    if (normalizedNewDate === charge.dueDate) {
+    if (normalizedNewDate === currentDueDate) {
       throw new Error('A nova data de vencimento precisa ser diferente da data atual.');
     }
 
     const now = new Date().toISOString();
-    const originalDueDate = charge.originalDueDate || charge.dueDate;
+    const originalDueDate = normalizeIsoDate(charge.originalDueDate) || currentDueDate;
     const targetType: 'plano' | 'veiculo' = charge.isPlanCharge ? 'plano' : 'veiculo';
     const targetLabel = charge.isPlanCharge
       ? `${charge.planName || 'Plano'} (${charge.vehiclePlate})`
@@ -1249,7 +1249,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const postponementRecord: ChargePostponementRecord = {
       id: `post_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       originalDueDate,
-      previousDueDate: charge.dueDate,
+      previousDueDate: currentDueDate,
       newDueDate: normalizedNewDate,
       referenceMonth: charge.referenceMonth,
       clientId: charge.clientId,
