@@ -1,4 +1,4 @@
-import { Client, Vehicle, Charge, Payment, ClientConsolidatedFinancials } from '../types';
+import { Client, Vehicle, Charge, Payment, Plan, ClientConsolidatedFinancials } from '../types';
 
 export function formatCurrency(value: number | undefined | null): string {
   if (value === undefined || value === null || isNaN(value)) {
@@ -172,7 +172,7 @@ export function calculateDashboardMetrics(
       totalPendingBalance += remaining;
     }
 
-    if (c.referenceMonth === currentMonth && isPendingOrPartial) {
+    if (getEffectiveBillingMonth(c) === currentMonth && isPendingOrPartial) {
       totalToReceiveMonth += remaining;
     }
 
@@ -327,5 +327,333 @@ export function getEffectiveCharges(charges: Charge[]): Charge[] {
     }
     return true;
   });
+}
+
+/**
+ * Extrai a competência YYYY-MM de uma string de data ISO ou YYYY-MM-DD.
+ * Para datas YYYY-MM-DD usa os componentes literais sem conversão de fuso.
+ * Para timestamps ISO com horário, usa o calendário local do ambiente.
+ */
+export function getMonthStrFromDateValue(dateStr?: string | null): string | null {
+  if (!dateStr || typeof dateStr !== 'string') return null;
+  const trimmed = dateStr.trim();
+  if (!trimmed) return null;
+
+  if (/^\d{4}-\d{2}$/.test(trimmed)) {
+    return trimmed;
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return trimmed.slice(0, 7);
+  }
+
+  const parsed = new Date(trimmed);
+  if (!isNaN(parsed.getTime())) {
+    const year = parsed.getFullYear();
+    const month = String(parsed.getMonth() + 1).padStart(2, '0');
+    return `${year}-${month}`;
+  }
+
+  const prefixMatch = trimmed.match(/^(\d{4}-\d{2})/);
+  return prefixMatch ? prefixMatch[1] : null;
+}
+
+/**
+ * Regra de início das mensalidades:
+ * A primeira mensalidade do cliente deve vencer somente no mês SEGUINTE
+ * ao mês em que o cliente foi cadastrado (independente do dia do cadastro ou dia de vencimento).
+ * Clientes legados sem data de cadastro continuam elegíveis normalmente.
+ */
+export function isCompetenceEligibleForClient(
+  targetMonth: string,
+  client?: Pick<Client, 'createdAt'> | null
+): boolean {
+  if (!/^\d{4}-\d{2}$/.test(targetMonth)) return false;
+  const registrationMonth = getMonthStrFromDateValue(client?.createdAt);
+  if (!registrationMonth) return true;
+  return targetMonth > registrationMonth;
+}
+
+/**
+ * Retorna a competência efetiva de vencimento de uma cobrança.
+ * Para cobranças sem adiamento, é idêntica a referenceMonth.
+ * Para cobranças adiadas, reflete o mês do novo vencimento escolhido.
+ */
+export function getEffectiveBillingMonth(
+  charge: Pick<Charge, 'referenceMonth' | 'isPostponed' | 'dueDate'>
+): string {
+  if (charge.isPostponed && charge.dueDate && /^\d{4}-\d{2}-\d{2}/.test(charge.dueDate)) {
+    return charge.dueDate.slice(0, 7);
+  }
+  return charge.referenceMonth;
+}
+
+/**
+ * Verifica se já existe cobrança ativa ou adiamento cobrindo a competência alvo,
+ * impedindo duplicação ou geração antecipada antes da data de adiamento escolhida.
+ * Após a quitação da cobrança adiada, competências futuras voltam automaticamente
+ * a ser geradas com o dia habitual de vencimento.
+ */
+export function isChargeBlockedByExistingOrPostponement(
+  targetMonth: string,
+  relatedCharges: Charge[]
+): boolean {
+  for (const c of relatedCharges) {
+    if (c.status === 'cancelado') continue;
+
+    if (c.referenceMonth === targetMonth) {
+      return true;
+    }
+
+    if (c.isPostponed && c.dueDate && /^\d{4}-\d{2}-\d{2}/.test(c.dueDate)) {
+      const deferredTargetMonth = c.dueDate.slice(0, 7);
+      const hasOpenBalance = c.status !== 'pago' && (Number(c.remainingBalance) || 0) > 0.009;
+
+      if (hasOpenBalance && targetMonth >= c.referenceMonth && targetMonth <= deferredTargetMonth) {
+        return true;
+      }
+
+      if (
+        c.status === 'pago' &&
+        deferredTargetMonth > c.referenceMonth &&
+        targetMonth > c.referenceMonth &&
+        targetMonth <= deferredTargetMonth
+      ) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+export interface PlannedChargeCreation {
+  deterministicId: string;
+  data: Omit<Charge, 'id' | 'createdAt' | 'updatedAt'>;
+  supersededChargeIds: string[];
+}
+
+export interface MonthlyChargeGenerationPlan {
+  chargesToCreate: PlannedChargeCreation[];
+  skippedCount: number;
+}
+
+/**
+ * Motor puro de planejamento das mensalidades de uma competência (YYYY-MM):
+ * - Respeita o início somente no mês seguinte ao cadastro do cliente.
+ * - Gera 1 cobrança única consolidada por plano ativo do cliente.
+ * - Gera cobranças individuais por veículo para clientes sem plano.
+ * - Bloqueia duplicidades e respeita adiamentos sem alterar o dia habitual futuro.
+ */
+export function planMonthlyCharges({
+  month,
+  clients,
+  vehicles,
+  plans,
+  charges,
+}: {
+  month: string;
+  clients: Client[];
+  vehicles: Vehicle[];
+  plans: Plan[];
+  charges: Charge[];
+}): MonthlyChargeGenerationPlan {
+  if (!/^\d{4}-\d{2}$/.test(month)) {
+    throw new Error('Competência inválida para geração de mensalidades.');
+  }
+
+  const [yearStr, monthStr] = month.split('-');
+  const targetYear = Number(yearStr);
+  const targetMonthIndex = Number(monthStr) - 1;
+
+  const chargesToCreate: PlannedChargeCreation[] = [];
+  let skippedCount = 0;
+
+  const clientMap = new Map<string, Client>();
+  clients.forEach((c) => clientMap.set(c.id, c));
+
+  const activeVehicles = vehicles.filter((v) => v.status === 'ativo');
+  const activePlans = plans.filter((p) => p.status === 'ativo');
+
+  const coveredVehicleIds = new Set<string>();
+  const planGroups = new Map<
+    string,
+    { clientId: string; planId: string; planName: string; planValue: number; vehicles: Vehicle[] }
+  >();
+
+  // 1A. Planos vinculados diretamente ao cliente (client.planId) — referência principal
+  for (const client of clients) {
+    if (client.status === 'inativo' || !client.planId) continue;
+    const plan = activePlans.find((p) => p.id === client.planId);
+    if (!plan) continue;
+
+    const clientVehicles = activeVehicles.filter((v) => v.clientId === client.id);
+    if (clientVehicles.length === 0) continue;
+
+    const key = `${client.id}__${plan.id}`;
+    planGroups.set(key, {
+      clientId: client.id,
+      planId: plan.id,
+      planName: plan.name || client.planName || 'Plano',
+      planValue: Number(plan.totalMonthlyValue) || 0,
+      vehicles: clientVehicles,
+    });
+    clientVehicles.forEach((v) => coveredVehicleIds.add(v.id));
+  }
+
+  // 1B. Fallback: veículos ativos vinculados via vehicle.planId
+  for (const v of activeVehicles) {
+    if (coveredVehicleIds.has(v.id)) continue;
+    if (v.planId) {
+      const key = `${v.clientId}__${v.planId}`;
+      const existing = planGroups.get(key);
+      if (existing) {
+        existing.vehicles.push(v);
+      } else {
+        const plan = activePlans.find((p) => p.id === v.planId);
+        planGroups.set(key, {
+          clientId: v.clientId,
+          planId: v.planId,
+          planName: plan?.name || v.planName || 'Plano',
+          planValue: Number(plan?.totalMonthlyValue ?? v.monthlyValue) || 0,
+          vehicles: [v],
+        });
+      }
+      coveredVehicleIds.add(v.id);
+    }
+  }
+
+  const standaloneVehicles = activeVehicles.filter((v) => !coveredVehicleIds.has(v.id));
+
+  // 2. Cobranças únicas consolidadas por plano
+  for (const [, group] of planGroups.entries()) {
+    const { clientId, planId, planName, planValue, vehicles: groupVehicles } = group;
+    const client = clientMap.get(clientId);
+
+    if (client?.status === 'inativo' || !isCompetenceEligibleForClient(month, client)) {
+      skippedCount++;
+      continue;
+    }
+
+    const firstVehicle = groupVehicles[0];
+    const groupVehicleIds = groupVehicles.map((v) => v.id);
+
+    const relatedPlanCharges = charges.filter(
+      (c) =>
+        c.status !== 'cancelado' &&
+        c.isPlanCharge &&
+        c.clientId === clientId &&
+        (c.planId === planId || c.referenceMonth === month)
+    );
+
+    if (isChargeBlockedByExistingOrPostponement(month, relatedPlanCharges)) {
+      skippedCount++;
+      continue;
+    }
+
+    const clientName = client?.name || 'Cliente';
+    const dueDate = getSafeDueDate(targetYear, targetMonthIndex, firstVehicle.dueDay || 10);
+    const platesList = groupVehicles.map((v) => v.plate);
+    const deterministicPlanChargeId = `chg_plan_${clientId}_${planId}_${month}`.replace(
+      /[^a-zA-Z0-9_-]/g,
+      '_'
+    );
+
+    const supersededChargeIds = charges
+      .filter(
+        (c) =>
+          !c.isPlanCharge &&
+          c.referenceMonth === month &&
+          c.status === 'pendente' &&
+          (c.paidAmount || 0) === 0 &&
+          (c.clientId === clientId || groupVehicleIds.includes(c.vehicleId))
+      )
+      .map((c) => c.id);
+
+    chargesToCreate.push({
+      deterministicId: deterministicPlanChargeId,
+      data: {
+        clientId,
+        clientName,
+        vehicleId: firstVehicle.id,
+        vehiclePlate: platesList.join(', '),
+        vehicleModel: `${groupVehicles.length} veículo(s) vinculados`,
+        referenceMonth: month,
+        originalMonthlyValue: planValue,
+        previousBalanceCarried: 0,
+        discount: 0,
+        addition: 0,
+        totalAmount: planValue,
+        paidAmount: 0,
+        remainingBalance: planValue,
+        dueDate,
+        status: 'pendente',
+        balanceHandling: 'none',
+        isPlanCharge: true,
+        planId,
+        planName,
+        vehicleIds: groupVehicleIds,
+        vehiclePlates: platesList,
+      },
+      supersededChargeIds,
+    });
+  }
+
+  // 3. Cobranças individuais por veículo para clientes sem plano
+  for (const vehicle of standaloneVehicles) {
+    const client = clientMap.get(vehicle.clientId);
+
+    if (client?.status === 'inativo' || !isCompetenceEligibleForClient(month, client)) {
+      skippedCount++;
+      continue;
+    }
+
+    const relatedVehicleCharges = charges.filter(
+      (c) => c.status !== 'cancelado' && !c.isPlanCharge && c.vehicleId === vehicle.id
+    );
+
+    if (isChargeBlockedByExistingOrPostponement(month, relatedVehicleCharges)) {
+      skippedCount++;
+      continue;
+    }
+
+    const clientName = client?.name || 'Cliente';
+    const prevCharges = charges.filter(
+      (c) => c.vehicleId === vehicle.id && c.remainingBalance > 0 && c.balanceHandling === 'next_month'
+    );
+    const carriedBalance = prevCharges.reduce((sum, item) => sum + item.remainingBalance, 0);
+
+    const dueDate = getSafeDueDate(targetYear, targetMonthIndex, vehicle.dueDay || 10);
+    const totalAmount = Number(vehicle.monthlyValue) + carriedBalance;
+    const deterministicVehChargeId = `chg_veh_${vehicle.id}_${month}`.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+    chargesToCreate.push({
+      deterministicId: deterministicVehChargeId,
+      data: {
+        clientId: vehicle.clientId,
+        clientName,
+        vehicleId: vehicle.id,
+        vehiclePlate: vehicle.plate,
+        vehicleModel: `${vehicle.brand} ${vehicle.model}`,
+        referenceMonth: month,
+        originalMonthlyValue: Number(vehicle.monthlyValue),
+        previousBalanceCarried: carriedBalance,
+        discount: 0,
+        addition: 0,
+        totalAmount,
+        paidAmount: 0,
+        remainingBalance: totalAmount,
+        dueDate,
+        status: 'pendente',
+        balanceHandling: 'none',
+      },
+      supersededChargeIds: [],
+    });
+  }
+
+  return {
+    chargesToCreate,
+    skippedCount,
+  };
 }
 

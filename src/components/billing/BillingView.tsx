@@ -7,12 +7,14 @@ import { ReceiptModal } from '../receipts/ReceiptModal';
 import { WhatsAppModal } from '../whatsapp/WhatsAppModal';
 import { NewChargeModal } from './NewChargeModal';
 import { DeleteChargeModal } from './DeleteChargeModal';
+import { PostponeChargeModal } from './PostponeChargeModal';
 import {
   formatCurrency,
   formatDate,
   getCurrentMonthStr,
   getTodayIsoDate,
   getEffectiveCharges,
+  getEffectiveBillingMonth,
 } from '../../lib/calculations';
 import {
   Receipt,
@@ -22,6 +24,7 @@ import {
   MessageSquare,
   FileText,
   Calendar,
+  CalendarClock,
   Clock,
   CheckCircle2,
   RefreshCw,
@@ -66,9 +69,14 @@ export const BillingView: React.FC<BillingViewProps> = ({ onNavigate }) => {
   const [isNewChargeModalOpen, setIsNewChargeModalOpen] = useState(false);
   const [isConsolidatedModalOpen, setIsConsolidatedModalOpen] = useState(false);
   const [chargeToDelete, setChargeToDelete] = useState<Charge | null>(null);
+  const [chargeToPostpone, setChargeToPostpone] = useState<Charge | null>(null);
 
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateResult, setGenerateResult] = useState<string | null>(null);
+  const [postponeFeedback, setPostponeFeedback] = useState<{
+    message: string;
+    targetMonth: string;
+  } | null>(null);
 
   const today = getTodayIsoDate();
 
@@ -127,7 +135,8 @@ export const BillingView: React.FC<BillingViewProps> = ({ onNavigate }) => {
         return false;
       }
 
-      const matchesMonth = !selectedMonth || selectedMonth === 'todos' || c.referenceMonth === selectedMonth;
+      const effectiveMonth = getEffectiveBillingMonth(c);
+      const matchesMonth = !selectedMonth || selectedMonth === 'todos' || effectiveMonth === selectedMonth;
       const matchesSearch =
         c.clientName.toLowerCase().includes(searchTerm.toLowerCase()) ||
         c.vehiclePlate.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -153,7 +162,7 @@ export const BillingView: React.FC<BillingViewProps> = ({ onNavigate }) => {
   let monthlyPartialCount = 0;
 
   effectiveCharges.forEach((c) => {
-    if (c.referenceMonth === selectedMonth && c.status !== 'cancelado') {
+    if (getEffectiveBillingMonth(c) === selectedMonth && c.status !== 'cancelado') {
       monthlyEstimated += Number(c.totalAmount) || 0;
       monthlyReceived += Number(c.paidAmount) || 0;
       if (c.remainingBalance > 0) {
@@ -214,6 +223,36 @@ export const BillingView: React.FC<BillingViewProps> = ({ onNavigate }) => {
           <button onClick={() => setGenerateResult(null)} className="text-emerald-600 hover:text-emerald-950">
             ✕
           </button>
+        </div>
+      )}
+
+      {postponeFeedback && (
+        <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 font-semibold flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <CalendarClock className="w-4 h-4 text-[#F28C1B] shrink-0" />
+            <span>{postponeFeedback.message}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            {selectedMonth && selectedMonth !== postponeFeedback.targetMonth && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedMonth(postponeFeedback.targetMonth);
+                  setPostponeFeedback(null);
+                }}
+                className="px-2.5 py-1 bg-[#30334F] hover:bg-[#222538] text-white rounded-lg text-2xs font-bold transition cursor-pointer"
+              >
+                Ver mês {postponeFeedback.targetMonth}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setPostponeFeedback(null)}
+              className="text-amber-700 hover:text-amber-950 cursor-pointer"
+            >
+              ✕
+            </button>
+          </div>
         </div>
       )}
 
@@ -477,8 +516,8 @@ export const BillingView: React.FC<BillingViewProps> = ({ onNavigate }) => {
                             {charge.vehicleModel}
                           </span>
                         </div>
-                        {/* If in client mode, show reference month badge if not filtering by month */}
-                        {!selectedMonth && (
+                        {/* Show original competence badge when viewing all history or when postponed to a different month */}
+                        {(!selectedMonth || getEffectiveBillingMonth(charge) !== charge.referenceMonth) && (
                           <div className="mt-1">
                             <span className="text-3xs font-mono font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200">
                               Ref: {charge.referenceMonth}
@@ -519,6 +558,19 @@ export const BillingView: React.FC<BillingViewProps> = ({ onNavigate }) => {
                         <div className="text-2xs text-slate-400">
                           {isOverdue ? 'Vencido!' : isToday ? 'Vence Hoje!' : 'No prazo'}
                         </div>
+                        {charge.isPostponed && (
+                          <div className="mt-1 inline-flex flex-col gap-0.5">
+                            <span className="inline-flex items-center gap-1 text-3xs font-bold px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 w-fit">
+                              <CalendarClock className="w-3 h-3 text-[#F28C1B]" />
+                              Adiada
+                            </span>
+                            {charge.originalDueDate && charge.originalDueDate !== charge.dueDate && (
+                              <span className="text-3xs text-slate-400">
+                                Orig: {formatDate(charge.originalDueDate)}
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </td>
 
                       {/* Original monthly value */}
@@ -627,14 +679,27 @@ export const BillingView: React.FC<BillingViewProps> = ({ onNavigate }) => {
                         <div className="flex items-center justify-end gap-1.5">
                           {/* Payment Button */}
                           {charge.remainingBalance > 0.009 ? (
-                            <button
-                              onClick={() => setChargeForPayment(charge)}
-                              title="Registrar Recebimento (Integral ou Parcial)"
-                              className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold shadow-xs flex items-center gap-1 transition"
-                            >
-                              <DollarSign className="w-3.5 h-3.5" />
-                              Baixar
-                            </button>
+                            <>
+                              <button
+                                onClick={() => setChargeForPayment(charge)}
+                                title="Registrar Recebimento (Integral ou Parcial)"
+                                className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold shadow-xs flex items-center gap-1 transition cursor-pointer whitespace-nowrap"
+                              >
+                                <DollarSign className="w-3.5 h-3.5" />
+                                Baixar
+                              </button>
+                              {charge.status !== 'pago' && charge.status !== 'cancelado' && (
+                                <button
+                                  type="button"
+                                  onClick={() => setChargeToPostpone(charge)}
+                                  title="Adiar mensalidade"
+                                  className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 rounded-lg text-xs font-bold flex items-center gap-1 transition cursor-pointer whitespace-nowrap"
+                                >
+                                  <CalendarClock className="w-3.5 h-3.5 text-[#F28C1B]" />
+                                  Adiar mensalidade
+                                </button>
+                              )}
+                            </>
                           ) : (
                             chargePayments.length > 0 && (
                               <button
@@ -731,6 +796,21 @@ export const BillingView: React.FC<BillingViewProps> = ({ onNavigate }) => {
           charge={chargeToDelete}
           onClose={() => setChargeToDelete(null)}
           onDeleted={() => setChargeToDelete(null)}
+        />
+      )}
+
+      {/* MODAL: Postpone Charge */}
+      {chargeToPostpone && (
+        <PostponeChargeModal
+          charge={chargeToPostpone}
+          onClose={() => setChargeToPostpone(null)}
+          onSuccess={(record) => {
+            setChargeToPostpone(null);
+            setPostponeFeedback({
+              message: `Mensalidade de ${record.clientName} adiada de ${formatDate(record.previousDueDate)} para ${formatDate(record.newDueDate)}.`,
+              targetMonth: record.newDueDate.slice(0, 7),
+            });
+          }}
         />
       )}
 

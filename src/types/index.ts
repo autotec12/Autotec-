@@ -66,6 +66,24 @@ export interface Vehicle {
   createdBy?: string;
 }
 
+export interface ChargePostponementRecord {
+  id: string;
+  originalDueDate: string; // YYYY-MM-DD (data original antes do primeiro adiamento)
+  previousDueDate: string; // YYYY-MM-DD (data anterior imediata)
+  newDueDate: string; // YYYY-MM-DD (nova data escolhida)
+  referenceMonth: string; // e.g., '2026-12'
+  clientId: string;
+  clientName: string;
+  targetType: 'plano' | 'veiculo';
+  targetLabel: string;
+  planId?: string;
+  vehicleId?: string;
+  postponedAt: string; // ISO timestamp
+  operatorId?: string;
+  operatorName?: string;
+  reason?: string;
+}
+
 export interface Charge {
   id: string;
   clientId: string;
@@ -82,6 +100,11 @@ export interface Charge {
   paidAmount: number;
   remainingBalance: number;
   dueDate: string; // YYYY-MM-DD
+  originalDueDate?: string; // YYYY-MM-DD preservada no primeiro adiamento
+  isPostponed?: boolean;
+  postponedAt?: string;
+  postponementCount?: number;
+  postponementHistory?: ChargePostponementRecord[];
   status: ChargeStatus;
   balanceHandling?: BalanceHandling;
   balanceScheduledDate?: string;

@@ -18,6 +18,7 @@ import {
   Client,
   Vehicle,
   Charge,
+  ChargePostponementRecord,
   Payment,
   ConsolidatedPaymentItem,
   CompanySettings,
@@ -37,7 +38,13 @@ import {
   FixedExpense,
 } from '../types';
 import { useAuth } from './AuthContext';
-import { getCurrentMonthStr, getTodayIsoDate, getCompetenceLabel } from '../lib/calculations';
+import {
+  getCurrentMonthStr,
+  getTodayIsoDate,
+  getCompetenceLabel,
+  formatDate,
+  planMonthlyCharges,
+} from '../lib/calculations';
 
 interface DataContextType {
   clients: Client[];
@@ -85,6 +92,11 @@ interface DataContextType {
   addCharge: (data: Omit<Charge, 'id' | 'createdAt' | 'updatedAt'>) => Promise<string>;
   updateCharge: (id: string, data: Partial<Charge>) => Promise<void>;
   deleteCharge: (id: string) => Promise<void>;
+  postponeCharge: (params: {
+    chargeId: string;
+    newDueDate: string;
+    reason?: string;
+  }) => Promise<ChargePostponementRecord>;
   generateMonthlyCharges: (month: string) => Promise<{ created: number; skipped: number }>;
   
   // Payment actions
@@ -1195,184 +1207,120 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  // Adiar mensalidade (adiamento temporário somente da cobrança selecionada, preservando dia habitual e histórico)
+  const postponeCharge = async ({
+    chargeId,
+    newDueDate,
+    reason,
+  }: {
+    chargeId: string;
+    newDueDate: string;
+    reason?: string;
+  }): Promise<ChargePostponementRecord> => {
+    const charge = charges.find((c) => c.id === chargeId);
+    if (!charge) {
+      throw new Error('Mensalidade não encontrada.');
+    }
+
+    if (charge.status === 'pago' || (Number(charge.remainingBalance) || 0) <= 0.009) {
+      throw new Error('Não é possível adiar uma mensalidade já quitada.');
+    }
+
+    if (charge.status === 'cancelado') {
+      throw new Error('Não é possível adiar uma mensalidade cancelada.');
+    }
+
+    const normalizedNewDate = (newDueDate || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(normalizedNewDate)) {
+      throw new Error('Informe uma data válida para o adiamento (dia, mês e ano).');
+    }
+
+    if (normalizedNewDate === charge.dueDate) {
+      throw new Error('A nova data de vencimento precisa ser diferente da data atual.');
+    }
+
+    const now = new Date().toISOString();
+    const originalDueDate = charge.originalDueDate || charge.dueDate;
+    const targetType: 'plano' | 'veiculo' = charge.isPlanCharge ? 'plano' : 'veiculo';
+    const targetLabel = charge.isPlanCharge
+      ? `${charge.planName || 'Plano'} (${charge.vehiclePlate})`
+      : `${charge.vehiclePlate} — ${charge.vehicleModel}`;
+
+    const postponementRecord: ChargePostponementRecord = {
+      id: `post_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      originalDueDate,
+      previousDueDate: charge.dueDate,
+      newDueDate: normalizedNewDate,
+      referenceMonth: charge.referenceMonth,
+      clientId: charge.clientId,
+      clientName: charge.clientName,
+      targetType,
+      targetLabel,
+      planId: charge.planId,
+      vehicleId: charge.vehicleId,
+      postponedAt: now,
+      operatorId: user?.uid || 'system',
+      operatorName: profile?.displayName || user?.displayName || user?.email || 'Operador',
+      reason: reason?.trim() || undefined,
+    };
+
+    const nextHistory = [...(charge.postponementHistory || []), postponementRecord];
+
+    try {
+      await updateDoc(
+        doc(db, 'charges', charge.id),
+        cleanFirestoreData({
+          dueDate: normalizedNewDate,
+          originalDueDate,
+          isPostponed: true,
+          postponedAt: now,
+          postponementCount: nextHistory.length,
+          postponementHistory: nextHistory,
+          updatedAt: now,
+        })
+      );
+
+      await logAudit(
+        'POSTPONE',
+        'Charge',
+        charge.id,
+        `Adiou mensalidade (${charge.referenceMonth}) de ${charge.clientName} [${targetLabel}] de ${formatDate(charge.dueDate)} para ${formatDate(normalizedNewDate)}${reason?.trim() ? ` — Motivo: ${reason.trim()}` : ''}`
+      );
+
+      return postponementRecord;
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `charges/${charge.id}`);
+      throw error;
+    }
+  };
+
   // Generate Monthly Charges: mutually exclusive — 1 charge per client plan, or 1 per vehicle for clients without a plan
   const generateMonthlyCharges = async (month: string) => {
+    const plan = planMonthlyCharges({
+      month,
+      clients,
+      vehicles,
+      plans,
+      charges,
+    });
+
     let created = 0;
-    let skipped = 0;
 
-    const activeVehicles = vehicles.filter((v) => v.status === 'ativo');
-    const activePlans = plans.filter((p) => p.status === 'ativo');
-
-    // Track which vehicles are covered by a plan so they NEVER generate individual charges
-    const coveredVehicleIds = new Set<string>();
-    const planGroups = new Map<string, { clientId: string; planId: string; planName: string; planValue: number; vehicles: typeof activeVehicles }>();
-
-    // 1A. Identify plans directly linked to clients (client.planId) — PRIMARY source of truth
-    for (const client of clients) {
-      if (client.status === 'inativo' || !client.planId) continue;
-      const plan = activePlans.find((p) => p.id === client.planId);
-      if (!plan) continue;
-
-      const clientVehicles = activeVehicles.filter((v) => v.clientId === client.id);
-      if (clientVehicles.length === 0) continue;
-
-      const key = `${client.id}__${plan.id}`;
-      planGroups.set(key, {
-        clientId: client.id,
-        planId: plan.id,
-        planName: plan.name || client.planName || 'Plano',
-        planValue: Number(plan.totalMonthlyValue) || 0,
-        vehicles: clientVehicles,
-      });
-      clientVehicles.forEach((v) => coveredVehicleIds.add(v.id));
-    }
-
-    // 1B. Fallback: group any remaining active vehicles that have vehicle.planId set
-    for (const v of activeVehicles) {
-      if (coveredVehicleIds.has(v.id)) continue;
-      if (v.planId) {
-        const key = `${v.clientId}__${v.planId}`;
-        const existing = planGroups.get(key);
-        if (existing) {
-          existing.vehicles.push(v);
-        } else {
-          const plan = activePlans.find((p) => p.id === v.planId);
-          planGroups.set(key, {
-            clientId: v.clientId,
-            planId: v.planId,
-            planName: plan?.name || v.planName || 'Plano',
-            planValue: Number(plan?.totalMonthlyValue ?? v.monthlyValue) || 0,
-            vehicles: [v],
-          });
-        }
-        coveredVehicleIds.add(v.id);
-      }
-    }
-
-    // Remaining vehicles without any plan
-    const standaloneVehicles = activeVehicles.filter((v) => !coveredVehicleIds.has(v.id));
-
-    // 2. Generate ONE single charge per client plan
-    for (const [, group] of planGroups.entries()) {
-      const { clientId, planId, planName, planValue, vehicles: groupVehicles } = group;
-      const firstVehicle = groupVehicles[0];
-      const groupVehicleIds = groupVehicles.map((v) => v.id);
-
-      // Check if a plan charge already exists for this client/plan/month
-      const exists = charges.some(
-        (c) =>
-          c.referenceMonth === month &&
-          c.status !== 'cancelado' &&
-          c.isPlanCharge &&
-          c.clientId === clientId &&
-          c.planId === planId
-      );
-
-      if (exists) {
-        skipped++;
-        continue;
-      }
-
-      const client = clients.find((c) => c.id === clientId);
-      const clientName = client?.name || 'Cliente';
-      const dueDayFormatted = String(Math.min(Math.max(firstVehicle.dueDay || 10, 1), 28)).padStart(2, '0');
-      const dueDate = `${month}-${dueDayFormatted}`;
-      const platesList = groupVehicles.map((v) => v.plate);
-
-      const deterministicPlanChargeId = `chg_plan_${clientId}_${planId}_${month}`.replace(/[^a-zA-Z0-9_-]/g, '_');
-
-      await addCharge({
-        clientId,
-        clientName,
-        vehicleId: firstVehicle.id,
-        vehiclePlate: platesList.join(', '),
-        vehicleModel: `${groupVehicles.length} veículo(s) vinculados`,
-        referenceMonth: month,
-        originalMonthlyValue: planValue,
-        previousBalanceCarried: 0,
-        discount: 0,
-        addition: 0,
-        totalAmount: planValue,
-        paidAmount: 0,
-        remainingBalance: planValue,
-        dueDate,
-        status: 'pendente',
-        balanceHandling: 'none',
-        isPlanCharge: true,
-        planId,
-        planName,
-        vehicleIds: groupVehicleIds,
-        vehiclePlates: platesList,
-      }, deterministicPlanChargeId);
+    for (const item of plan.chargesToCreate) {
+      await addCharge(item.data, item.deterministicId);
 
       // Safely mark any old unpaid individual charges for these vehicles in this month as superseded (preserving documents & paid/partial records)
-      const supersededCharges = charges.filter(
-        (c) =>
-          !c.isPlanCharge &&
-          c.referenceMonth === month &&
-          c.status === 'pendente' &&
-          (c.paidAmount || 0) === 0 &&
-          (c.clientId === clientId || groupVehicleIds.includes(c.vehicleId))
-      );
-      for (const oldChg of supersededCharges) {
-        await updateCharge(oldChg.id, {
+      for (const oldChgId of item.supersededChargeIds) {
+        await updateCharge(oldChgId, {
           status: 'cancelado',
-          notes: `Substituída por cobrança única do plano (${planName}) - Ref: ${deterministicPlanChargeId}`,
+          notes: `Substituída por cobrança única do plano (${item.data.planName || 'Plano'}) - Ref: ${item.deterministicId}`,
         });
       }
 
       created++;
     }
 
-    // 3. Generate individual charges for vehicles WITHOUT a plan
-    for (const vehicle of standaloneVehicles) {
-      const exists = charges.some(
-        (c) => c.vehicleId === vehicle.id && c.referenceMonth === month && c.status !== 'cancelado'
-      );
-
-      if (exists) {
-        skipped++;
-        continue;
-      }
-
-      const client = clients.find((c) => c.id === vehicle.clientId);
-      const clientName = client?.name || 'Cliente';
-
-      const prevCharges = charges.filter(
-        (c) => c.vehicleId === vehicle.id && c.remainingBalance > 0 && c.balanceHandling === 'next_month'
-      );
-      const carriedBalance = prevCharges.reduce((sum, item) => sum + item.remainingBalance, 0);
-
-      const dueDayFormatted = String(Math.min(Math.max(vehicle.dueDay || 10, 1), 28)).padStart(2, '0');
-      const dueDate = `${month}-${dueDayFormatted}`;
-
-      const totalAmount = Number(vehicle.monthlyValue) + carriedBalance;
-
-      const deterministicVehChargeId = `chg_veh_${vehicle.id}_${month}`.replace(/[^a-zA-Z0-9_-]/g, '_');
-
-      await addCharge({
-        clientId: vehicle.clientId,
-        clientName,
-        vehicleId: vehicle.id,
-        vehiclePlate: vehicle.plate,
-        vehicleModel: `${vehicle.brand} ${vehicle.model}`,
-        referenceMonth: month,
-        originalMonthlyValue: Number(vehicle.monthlyValue),
-        previousBalanceCarried: carriedBalance,
-        discount: 0,
-        addition: 0,
-        totalAmount,
-        paidAmount: 0,
-        remainingBalance: totalAmount,
-        dueDate,
-        status: 'pendente',
-        balanceHandling: 'none',
-      }, deterministicVehChargeId);
-
-      created++;
-    }
-
-    return { created, skipped };
+    return { created, skipped: plan.skippedCount };
   };
 
   // RECORD PAYMENT (With Strict Partial Handling)
@@ -2920,6 +2868,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         addCharge,
         updateCharge,
         deleteCharge,
+        postponeCharge,
         generateMonthlyCharges,
         recordPayment,
         recordConsolidatedPayment,
