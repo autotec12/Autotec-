@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Charge, Client, Vehicle, PaymentMethod, BalanceHandling, Payment } from '../../types';
 import { useData } from '../../context/DataContext';
 import { formatCurrency } from '../../lib/calculations';
+import { FinancialValidationError, createOperationId } from '../../lib/financialTransactions';
 import { DollarSign, X, CheckCircle, AlertTriangle, Calendar } from 'lucide-react';
 
 interface PaymentModalProps {
@@ -28,6 +29,14 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
   );
   const [submitting, setSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const submittingRef = useRef(false);
+  const operationIdRef = useRef<string>(createOperationId('pay'));
+
+  useEffect(() => {
+    if (!submittingRef.current) {
+      operationIdRef.current = createOperationId('pay');
+    }
+  }, [charge.id, amountStr, paymentMethod, balanceHandling, scheduledDate, notes]);
 
   const numAmount = parseFloat(amountStr.replace(',', '.')) || 0;
   const remainingCalculated = Math.max(0, charge.remainingBalance - numAmount);
@@ -36,6 +45,8 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submittingRef.current) return;
+
     if (numAmount <= 0) {
       setErrorMessage('Informe um valor de recebimento válido maior que zero.');
       return;
@@ -45,6 +56,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
       return;
     }
 
+    submittingRef.current = true;
     try {
       setSubmitting(true);
       setErrorMessage(null);
@@ -56,12 +68,18 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
         notes: notes.trim() || '',
         balanceHandling: isPartial ? balanceHandling : 'none',
         balanceScheduledDate: isPartial && balanceHandling === 'specific_date' ? scheduledDate : '',
+        operationId: operationIdRef.current,
       });
 
       onSuccess(payment);
     } catch (err) {
       console.error('Payment record error:', err);
-      setErrorMessage('Erro ao registrar recebimento no Firestore. Tente novamente.');
+      submittingRef.current = false;
+      setErrorMessage(
+        err instanceof FinancialValidationError
+          ? err.message
+          : 'Erro ao registrar recebimento no Firestore. Tente novamente.'
+      );
       setSubmitting(false);
     }
   };

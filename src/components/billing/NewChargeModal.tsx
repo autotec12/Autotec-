@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { useData } from '../../context/DataContext';
+import { FinancialValidationError } from '../../lib/financialTransactions';
 import { FilePlus, X, Check, AlertCircle } from 'lucide-react';
 import { getCurrentMonthStr } from '../../lib/calculations';
 
@@ -24,6 +25,7 @@ export const NewChargeModal: React.FC<NewChargeModalProps> = ({ onClose, onSucce
   const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const submittingRef = useRef(false);
 
   const handleVehicleChange = (id: string) => {
     setVehicleId(id);
@@ -37,6 +39,8 @@ export const NewChargeModal: React.FC<NewChargeModalProps> = ({ onClose, onSucce
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submittingRef.current) return;
+
     const selVehicle = vehicles.find((v) => v.id === vehicleId);
     if (!selVehicle) {
       setError('Selecione um veículo.');
@@ -48,6 +52,7 @@ export const NewChargeModal: React.FC<NewChargeModalProps> = ({ onClose, onSucce
     const prevBalanceVal = parseFloat(previousBalance.replace(',', '.')) || 0;
     const total = originalVal + prevBalanceVal;
 
+    submittingRef.current = true;
     try {
       setSubmitting(true);
       setError(null);
@@ -75,7 +80,12 @@ export const NewChargeModal: React.FC<NewChargeModalProps> = ({ onClose, onSucce
       onSuccess(id);
     } catch (err) {
       console.error('Error adding charge:', err);
-      setError('Erro ao gerar mensalidade no Firestore.');
+      submittingRef.current = false;
+      setError(
+        err instanceof FinancialValidationError
+          ? err.message
+          : 'Erro ao gerar mensalidade no Firestore.'
+      );
       setSubmitting(false);
     }
   };

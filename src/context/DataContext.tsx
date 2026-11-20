@@ -43,10 +43,19 @@ import {
   getTodayIsoDate,
   getCompetenceLabel,
   formatDate,
-  planMonthlyCharges,
   getPostponeEligibility,
   normalizeIsoDate,
 } from '../lib/calculations';
+import {
+  FinancialStoreAdapter,
+  FinancialValidationError,
+  TransactionLike,
+  createOperationId,
+  executeCreateChargeIfAbsent,
+  executeMonthlyChargeGeneration,
+  executeRecordConsolidatedPayment,
+  executeRecordPayment,
+} from '../lib/financialTransactions';
 
 export interface RefreshDataResult {
   ok: boolean;
@@ -100,7 +109,7 @@ interface DataContextType {
   deleteVehicle: (id: string) => Promise<void>;
   
   // Charge actions
-  addCharge: (data: Omit<Charge, 'id' | 'createdAt' | 'updatedAt'>) => Promise<string>;
+  addCharge: (data: Omit<Charge, 'id' | 'createdAt' | 'updatedAt'>, customId?: string) => Promise<string>;
   updateCharge: (id: string, data: Partial<Charge>) => Promise<void>;
   deleteCharge: (id: string) => Promise<void>;
   postponeCharge: (params: {
@@ -118,6 +127,7 @@ interface DataContextType {
     notes?: string;
     balanceHandling?: BalanceHandling;
     balanceScheduledDate?: string;
+    operationId?: string;
   }) => Promise<Payment>;
   recordConsolidatedPayment: (params: {
     clientId: string;
@@ -126,6 +136,7 @@ interface DataContextType {
     paymentDate: string;
     paymentMethod: PaymentMethod;
     notes?: string;
+    operationId?: string;
   }) => Promise<Payment>;
   
   // Technical Services actions
@@ -255,6 +266,29 @@ const defaultSettings: CompanySettings = {
 };
 
 const DataContext = createContext<DataContextType>({} as DataContextType);
+
+const firestoreFinancialStoreAdapter: FinancialStoreAdapter = {
+  runTransaction: (fn) =>
+    runTransaction(db, async (tx) => {
+      const txWrapper: TransactionLike = {
+        get: async (colName, id) => {
+          const snap = await tx.get(doc(db, colName, id));
+          return {
+            id: snap.id,
+            exists: () => snap.exists(),
+            data: () => snap.data() as any,
+          };
+        },
+        set: (colName, id, data) => {
+          tx.set(doc(db, colName, id), cleanFirestoreData(data));
+        },
+        update: (colName, id, data) => {
+          tx.update(doc(db, colName, id), cleanFirestoreData(data));
+        },
+      };
+      return fn(txWrapper);
+    }),
+};
 
 const REQUIRED_DATA_LISTENERS = [
   { key: 'company_settings', label: 'Configurações da Empresa' },
@@ -1188,27 +1222,26 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // CHARGE ACTIONS
   const addCharge = async (data: Omit<Charge, 'id' | 'createdAt' | 'updatedAt'>, customId?: string) => {
-    const id = customId || `chg_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-    const now = new Date().toISOString();
-    const newCharge: Charge = {
-      ...data,
-      id,
-      originalMonthlyValue: Number(data.originalMonthlyValue),
-      previousBalanceCarried: Number(data.previousBalanceCarried || 0),
-      discount: Number(data.discount || 0),
-      addition: Number(data.addition || 0),
-      totalAmount: Number(data.totalAmount),
-      paidAmount: Number(data.paidAmount || 0),
-      remainingBalance: Number(data.remainingBalance),
-      createdAt: now,
-      updatedAt: now,
-      createdBy: user?.uid || '',
-    };
+    const id = customId || createOperationId('chg');
     try {
-      await setDoc(doc(db, 'charges', id), cleanFirestoreData(newCharge));
-      await logAudit('CREATE', 'Charge', id, `Gerou cobrança ${newCharge.referenceMonth} do veículo ${newCharge.vehiclePlate}`);
-      return id;
+      const result = await executeCreateChargeIfAbsent(firestoreFinancialStoreAdapter, {
+        id,
+        data,
+        createdBy: user?.uid || '',
+      });
+      if (result.created) {
+        await logAudit(
+          'CREATE',
+          'Charge',
+          result.id,
+          `Gerou cobrança ${result.charge.referenceMonth} do veículo ${result.charge.vehiclePlate}`
+        );
+      }
+      return result.id;
     } catch (error) {
+      if (error instanceof FinancialValidationError) {
+        throw error;
+      }
       handleFirestoreError(error, OperationType.CREATE, `charges/${id}`);
     }
   };
@@ -1233,8 +1266,12 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         throw new Error('Cobrança não encontrada.');
       }
 
-      // Safeguard: Check if there are any linked payments or paid amount > 0
-      const linkedPayments = payments.filter((p) => p.chargeId === id);
+      // Safeguard: Check if there are any linked payments (individual or consolidated) or paid amount > 0
+      const linkedPayments = payments.filter(
+        (p) =>
+          p.chargeId === id ||
+          (Array.isArray(p.consolidatedItems) && p.consolidatedItems.some((item) => item.chargeId === id))
+      );
       if ((charge.paidAmount && charge.paidAmount > 0) || linkedPayments.length > 0) {
         throw new Error(
           'Não é permitido excluir esta mensalidade pois ela possui registros de pagamentos vinculados. Para preservar a integridade contábil e auditoria financeira, a exclusão de cobranças com pagamentos é bloqueada.'
@@ -1339,36 +1376,45 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // Generate Monthly Charges: mutually exclusive — 1 charge per client plan, or 1 per vehicle for clients without a plan
+  // Generate Monthly Charges (Etapa A): 1 individual charge per active vehicle using its own monthlyValue and dueDay
   const generateMonthlyCharges = async (month: string) => {
-    const plan = planMonthlyCharges({
-      month,
-      clients,
-      vehicles,
-      plans,
-      charges,
-    });
+    try {
+      const result = await executeMonthlyChargeGeneration(firestoreFinancialStoreAdapter, {
+        month,
+        clients,
+        vehicles,
+        plans: [],
+        charges,
+        fetchServerCharges: async () => {
+          const snap = await getDocsFromServer(collection(db, 'charges'));
+          const serverCharges: Charge[] = [];
+          snap.forEach((docSnap) => {
+            serverCharges.push({ id: docSnap.id, ...docSnap.data() } as Charge);
+          });
+          return serverCharges;
+        },
+        createdBy: user?.uid || '',
+      });
 
-    let created = 0;
-
-    for (const item of plan.chargesToCreate) {
-      await addCharge(item.data, item.deterministicId);
-
-      // Safely mark any old unpaid individual charges for these vehicles in this month as superseded (preserving documents & paid/partial records)
-      for (const oldChgId of item.supersededChargeIds) {
-        await updateCharge(oldChgId, {
-          status: 'cancelado',
-          notes: `Substituída por cobrança única do plano (${item.data.planName || 'Plano'}) - Ref: ${item.deterministicId}`,
-        });
+      if (result.created > 0) {
+        await logAudit(
+          'CREATE',
+          'Charge',
+          month,
+          `Geração em lote (${month}): ${result.created} cobrança(s) criada(s), ${result.skipped} ignorada(s)`
+        );
       }
 
-      created++;
+      return { created: result.created, skipped: result.skipped };
+    } catch (error) {
+      if (error instanceof FinancialValidationError) {
+        throw error;
+      }
+      handleFirestoreError(error, OperationType.WRITE, `charges/${month}`);
     }
-
-    return { created, skipped: plan.skippedCount };
   };
 
-  // RECORD PAYMENT (With Strict Partial Handling)
+  // RECORD PAYMENT (Atomic Transaction + Idempotency Key + Live Balance Validation)
   const recordConsolidatedPayment = async ({
     clientId,
     clientName,
@@ -1376,6 +1422,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     paymentDate,
     paymentMethod,
     notes = '',
+    operationId,
   }: {
     clientId: string;
     clientName: string;
@@ -1383,126 +1430,38 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     paymentDate: string;
     paymentMethod: PaymentMethod;
     notes?: string;
+    operationId?: string;
   }): Promise<Payment> => {
-    if (!items || items.length === 0) {
-      throw new Error('Selecione ao menos uma mensalidade para registrar o recebimento.');
-    }
-
-    const totalAmount = items.reduce((acc, it) => acc + (Number(it.amountToPay) || 0), 0);
-    if (totalAmount <= 0) {
-      throw new Error('O valor total do recebimento deve ser maior que zero.');
-    }
-
-    const now = new Date().toISOString();
-    const paymentId = `pay_cons_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-    const receiptNumber = `REC-CONS-${Date.now().toString().slice(-6)}`;
-
-    const consolidatedItems: ConsolidatedPaymentItem[] = [];
-    let totalRemainingAfter = 0;
-
-    await runTransaction(db, async (transaction) => {
-      // 1. Read all charges inside transaction to guarantee atomic state & prevent duplicate payments
-      const chargeDocs = await Promise.all(
-        items.map((it) => transaction.get(doc(db, 'charges', it.charge.id)))
-      );
-
-      for (let i = 0; i < items.length; i++) {
-        const snap = chargeDocs[i];
-        const { charge, amountToPay } = items[i];
-        if (!snap.exists()) {
-          throw new Error(`Cobrança ${charge.vehiclePlate} (${charge.referenceMonth}) não encontrada.`);
-        }
-        const currentData = snap.data() as Charge;
-        const currentRemaining = Math.max(0, Number(currentData.remainingBalance ?? (currentData.totalAmount - (currentData.paidAmount || 0))));
-
-        if (currentData.status === 'pago' || currentRemaining <= 0.009) {
-          throw new Error(`A mensalidade do veículo ${currentData.vehiclePlate} (${currentData.referenceMonth}) já está quitada.`);
-        }
-        if (amountToPay > currentRemaining + 0.01) {
-          throw new Error(`O valor informado para ${currentData.vehiclePlate} ultrapassa o saldo pendente.`);
-        }
-
-        const newPaid = Math.round(((currentData.paidAmount || 0) + amountToPay) * 100) / 100;
-        const newRemaining = Math.max(0, Math.round((currentData.totalAmount - newPaid) * 100) / 100);
-        const newStatus = newRemaining <= 0.009 ? 'pago' : 'parcial';
-
-        totalRemainingAfter += newRemaining;
-
-        consolidatedItems.push({
-          chargeId: currentData.id,
-          vehicleId: currentData.vehicleId,
-          vehiclePlate: currentData.vehiclePlate,
-          vehicleModel: currentData.vehicleModel || '',
-          referenceMonth: currentData.referenceMonth,
-          originalAmount: currentData.totalAmount,
-          previousPaidAmount: currentData.paidAmount || 0,
-          paidInThisOperation: Math.round(amountToPay * 100) / 100,
-          remainingAfterOperation: newRemaining,
-          statusAfterOperation: newStatus,
-        });
-
-        transaction.update(doc(db, 'charges', currentData.id), cleanFirestoreData({
-          paidAmount: newPaid,
-          remainingBalance: newRemaining,
-          status: newStatus,
-          paymentDate,
-          updatedAt: now,
-        }));
-      }
-
-      const consolidatedPayment: Payment = {
-        id: paymentId,
-        chargeId: items[0].charge.id,
+    try {
+      const result = await executeRecordConsolidatedPayment(firestoreFinancialStoreAdapter, {
         clientId,
         clientName,
-        vehicleId: items[0].charge.vehicleId,
-        vehiclePlate: items.map((it) => it.charge.vehiclePlate).join(', '),
-        amount: Math.round(totalAmount * 100) / 100,
+        items,
         paymentDate,
         paymentMethod,
+        notes,
         operatorId: user?.uid || 'admin',
-        operatorName: user?.displayName || user?.email || 'Administrador',
-        receiptNumber,
-        remainingAfterPayment: Math.round(totalRemainingAfter * 100) / 100,
-        notes: notes.trim() || `Recebimento consolidado de ${items.length} mensalidade(s)`,
-        companySnapshot: companySettings,
-        isConsolidated: true,
-        consolidatedItems,
-        createdAt: now,
-      };
+        operatorName: profile?.displayName || user?.displayName || user?.email || 'Administrador',
+        companySnapshot: { ...companySettings },
+        operationId,
+      });
 
-      transaction.set(doc(db, 'payments', paymentId), cleanFirestoreData(consolidatedPayment));
-    });
+      if (!result.wasReplay) {
+        await logAudit(
+          'PAYMENT',
+          'ConsolidatedPayment',
+          result.payment.id,
+          `Recebimento consolidado ${result.payment.receiptNumber} para ${clientName}: R$ ${result.payment.amount.toFixed(2)} (${items.length} veículos/mensalidades)`
+        );
+      }
 
-    await logAudit(
-      'PAYMENT',
-      'ConsolidatedPayment',
-      paymentId,
-      `Recebimento consolidado ${receiptNumber} para ${clientName}: R$ ${totalAmount.toFixed(2)} (${items.length} veículos/mensalidades)`
-    );
-
-    const createdPayment: Payment = {
-      id: paymentId,
-      chargeId: items[0].charge.id,
-      clientId,
-      clientName,
-      vehicleId: items[0].charge.vehicleId,
-      vehiclePlate: items.map((it) => it.charge.vehiclePlate).join(', '),
-      amount: Math.round(totalAmount * 100) / 100,
-      paymentDate,
-      paymentMethod,
-      operatorId: user?.uid || 'admin',
-      operatorName: user?.displayName || user?.email || 'Administrador',
-      receiptNumber,
-      remainingAfterPayment: Math.round(totalRemainingAfter * 100) / 100,
-      notes: notes.trim() || `Recebimento consolidado de ${items.length} mensalidade(s)`,
-      companySnapshot: companySettings,
-      isConsolidated: true,
-      consolidatedItems,
-      createdAt: now,
-    };
-
-    return createdPayment;
+      return result.payment;
+    } catch (error) {
+      if (error instanceof FinancialValidationError) {
+        throw error;
+      }
+      handleFirestoreError(error, OperationType.WRITE, `payments/${operationId || 'consolidated'}`);
+    }
   };
 
   const recordPayment = async ({
@@ -1512,6 +1471,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     notes,
     balanceHandling = 'none',
     balanceScheduledDate,
+    operationId,
   }: {
     charge: Charge;
     amount: number;
@@ -1519,62 +1479,36 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     notes?: string;
     balanceHandling?: BalanceHandling;
     balanceScheduledDate?: string;
+    operationId?: string;
   }): Promise<Payment> => {
-    const paymentId = `pay_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-    const now = new Date().toISOString();
-    const receiptNumber = `REC-${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}-${Math.floor(1000 + Math.random() * 9000)}`;
-
-    const currentPaid = Number(charge.paidAmount) || 0;
-    const paymentValue = Number(amount);
-    const newPaidAmount = currentPaid + paymentValue;
-    const newRemainingBalance = Math.max(0, Number(charge.totalAmount) - newPaidAmount);
-
-    const isFullyPaid = newRemainingBalance <= 0.009;
-    const newStatus = isFullyPaid ? 'pago' : 'parcial';
-
-    const paymentData: Payment = {
-      id: paymentId,
-      chargeId: charge.id,
-      clientId: charge.clientId,
-      clientName: charge.clientName,
-      vehicleId: charge.vehicleId,
-      vehiclePlate: charge.vehiclePlate,
-      amount: paymentValue,
-      paymentDate: now,
-      paymentMethod,
-      operatorId: user?.uid || 'system',
-      operatorName: profile?.displayName || user?.displayName || 'Operador',
-      receiptNumber,
-      remainingAfterPayment: newRemainingBalance,
-      notes,
-      companySnapshot: { ...companySettings },
-      createdAt: now,
-    };
-
     try {
-      // 1. Record immutable payment
-      await setDoc(doc(db, 'payments', paymentId), cleanFirestoreData(paymentData));
+      const result = await executeRecordPayment(firestoreFinancialStoreAdapter, {
+        chargeId: charge.id,
+        amount,
+        paymentMethod,
+        notes,
+        balanceHandling,
+        balanceScheduledDate,
+        operatorId: user?.uid || 'system',
+        operatorName: profile?.displayName || user?.displayName || 'Operador',
+        companySnapshot: { ...companySettings },
+        operationId,
+      });
 
-      // 2. Update charge with new status & remaining balance
-      await updateDoc(doc(db, 'charges', charge.id), cleanFirestoreData({
-        paidAmount: newPaidAmount,
-        remainingBalance: newRemainingBalance,
-        status: newStatus,
-        balanceHandling: isFullyPaid ? 'none' : balanceHandling,
-        balanceScheduledDate: balanceScheduledDate || null,
-        updatedAt: now,
-      }));
+      if (!result.wasReplay) {
+        const auditDetails = result.isFullyPaid
+          ? `Recebimento integral de R$ ${result.payment.amount.toFixed(2)} para ${result.payment.vehiclePlate} (${result.payment.receiptNumber})`
+          : `Recebimento parcial de R$ ${result.payment.amount.toFixed(2)} para ${result.payment.vehiclePlate}. Saldo restante: R$ ${result.newRemainingBalance.toFixed(2)} (${result.payment.receiptNumber})`;
 
-      // 3. Log audit trail
-      const auditDetails = isFullyPaid
-        ? `Recebimento integral de R$ ${paymentValue.toFixed(2)} para ${charge.vehiclePlate} (${receiptNumber})`
-        : `Recebimento parcial de R$ ${paymentValue.toFixed(2)} para ${charge.vehiclePlate}. Saldo restante: R$ ${newRemainingBalance.toFixed(2)} (${receiptNumber})`;
+        await logAudit('PAYMENT', 'Payment', result.payment.id, auditDetails);
+      }
 
-      await logAudit('PAYMENT', 'Payment', paymentId, auditDetails);
-
-      return paymentData;
+      return result.payment;
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, `payments/${paymentId}`);
+      if (error instanceof FinancialValidationError) {
+        throw error;
+      }
+      handleFirestoreError(error, OperationType.WRITE, `payments/${operationId || charge.id}`);
     }
   };
 

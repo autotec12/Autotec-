@@ -1,5 +1,11 @@
 import { Client, Vehicle, Charge, Payment, Plan, ClientConsolidatedFinancials } from '../types';
 
+export function roundCurrencyValue(value: number): number {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 0;
+  return Math.round((num + Math.sign(num) * 1e-10) * 100) / 100;
+}
+
 export function formatCurrency(value: number | undefined | null): string {
   if (value === undefined || value === null || isNaN(value)) {
     return 'R$ 0,00';
@@ -157,7 +163,9 @@ export function calculateDashboardMetrics(
 
     if (v.status === 'ativo') {
       activeVehiclesCount++;
-      estimatedMonthlyRevenue += Number(v.monthlyValue) || 0;
+      estimatedMonthlyRevenue = roundCurrencyValue(
+        estimatedMonthlyRevenue + (Number(v.monthlyValue) || 0)
+      );
     } else if (v.status === 'suspenso') {
       suspendedVehiclesCount++;
     } else if (v.status === 'cancelado') {
@@ -169,7 +177,7 @@ export function calculateDashboardMetrics(
   let totalReceivedMonth = 0;
   payments.forEach((p) => {
     if (p.paymentDate && p.paymentDate.startsWith(currentMonth)) {
-      totalReceivedMonth += Number(p.amount) || 0;
+      totalReceivedMonth = roundCurrencyValue(totalReceivedMonth + (Number(p.amount) || 0));
     }
   });
 
@@ -187,26 +195,26 @@ export function calculateDashboardMetrics(
   charges.forEach((c) => {
     if (c.status === 'cancelado') return;
 
-    const remaining = Number(c.remainingBalance) || 0;
+    const remaining = roundCurrencyValue(Number(c.remainingBalance) || 0);
     const isDue = c.dueDate < today && remaining > 0;
     const isToday = c.dueDate === today && remaining > 0;
     const isPendingOrPartial = (c.status === 'pendente' || c.status === 'parcial') && remaining > 0;
 
     if (remaining > 0) {
-      totalPendingBalance += remaining;
+      totalPendingBalance = roundCurrencyValue(totalPendingBalance + remaining);
     }
 
     if (getEffectiveBillingMonth(c) === currentMonth && isPendingOrPartial) {
-      totalToReceiveMonth += remaining;
+      totalToReceiveMonth = roundCurrencyValue(totalToReceiveMonth + remaining);
     }
 
     if (c.status === 'parcial' && remaining > 0) {
-      totalPartialAmount += remaining;
+      totalPartialAmount = roundCurrencyValue(totalPartialAmount + remaining);
       partialCharges.push(c);
     }
 
     if (isDue) {
-      totalOverdueAmount += remaining;
+      totalOverdueAmount = roundCurrencyValue(totalOverdueAmount + remaining);
       defaultingClientIds.add(c.clientId);
       overdueCharges.push(c);
     } else if (isToday) {
@@ -260,7 +268,7 @@ export function consolidateClientFinancials(
   let totalMonthlyValue = 0;
   clientVehicles.forEach((v) => {
     if (v.status === 'ativo') {
-      totalMonthlyValue += Number(v.monthlyValue) || 0;
+      totalMonthlyValue = roundCurrencyValue(totalMonthlyValue + (Number(v.monthlyValue) || 0));
     }
   });
 
@@ -270,12 +278,12 @@ export function consolidateClientFinancials(
   let isOverdue = false;
 
   clientCharges.forEach((c) => {
-    totalReceived += Number(c.paidAmount) || 0;
-    const remaining = Number(c.remainingBalance) || 0;
+    totalReceived = roundCurrencyValue(totalReceived + (Number(c.paidAmount) || 0));
+    const remaining = roundCurrencyValue(Number(c.remainingBalance) || 0);
     if (remaining > 0) {
-      totalPending += remaining;
+      totalPending = roundCurrencyValue(totalPending + remaining);
       if (c.dueDate < today) {
-        totalOverdue += remaining;
+        totalOverdue = roundCurrencyValue(totalOverdue + remaining);
         isOverdue = true;
       }
     }
@@ -598,23 +606,87 @@ export interface MonthlyChargeGenerationPlan {
 }
 
 /**
- * Motor puro de planejamento das mensalidades de uma competência (YYYY-MM):
+ * Verifica se uma cobrança existente (individual ou histórica de plano `isPlanCharge`)
+ * cobre determinado veículo, permitindo bloquear duplicidades sem alterar ou cancelar o histórico.
+ */
+export function doesChargeCoverVehicle(
+  charge: Pick<
+    Charge,
+    | 'status'
+    | 'clientId'
+    | 'vehicleId'
+    | 'vehicleIds'
+    | 'vehiclePlate'
+    | 'vehiclePlates'
+    | 'isPlanCharge'
+  >,
+  vehicle: Pick<Vehicle, 'id' | 'clientId' | 'plate'>
+): boolean {
+  if (charge.status === 'cancelado') return false;
+
+  if (charge.vehicleId === vehicle.id) {
+    return true;
+  }
+
+  if (Array.isArray(charge.vehicleIds) && charge.vehicleIds.includes(vehicle.id)) {
+    return true;
+  }
+
+  if (charge.isPlanCharge && charge.clientId === vehicle.clientId) {
+    const normalizedPlate = (vehicle.plate || '').trim().toUpperCase();
+    if (normalizedPlate) {
+      if (
+        Array.isArray(charge.vehiclePlates) &&
+        charge.vehiclePlates.some((p) => String(p).trim().toUpperCase() === normalizedPlate)
+      ) {
+        return true;
+      }
+
+      if (typeof charge.vehiclePlate === 'string' && charge.vehiclePlate.trim().length > 0) {
+        const splitPlates = charge.vehiclePlate
+          .split(',')
+          .map((p) => p.trim().toUpperCase())
+          .filter(Boolean);
+        if (splitPlates.includes(normalizedPlate)) {
+          return true;
+        }
+      }
+    }
+
+    const hasExplicitVehicleIds = Array.isArray(charge.vehicleIds) && charge.vehicleIds.length > 0;
+    const hasExplicitPlates =
+      (Array.isArray(charge.vehiclePlates) && charge.vehiclePlates.length > 0) ||
+      (typeof charge.vehiclePlate === 'string' && charge.vehiclePlate.trim().length > 0);
+
+    // Fallback conservador para cobranças legadas de plano sem lista de veículos/placas
+    if (!hasExplicitVehicleIds && !hasExplicitPlates) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Motor puro de planejamento das mensalidades de uma competência (YYYY-MM) — ETAPA A:
+ * - Gera cobranças exclusivamente individuais por veículo ativo (`chg_veh_{vehicleId}_{month}`),
+ *   utilizando o `monthlyValue` e o `dueDay` próprios de cada veículo.
+ * - Ignora agrupamento comercial por planos na criação de novas cobranças, preservando integralmente
+ *   o histórico existente (inclusive cobranças históricas `isPlanCharge`, pagas, parciais ou adiadas).
  * - Respeita o início somente no mês seguinte ao cadastro do cliente.
- * - Gera 1 cobrança única consolidada por plano ativo do cliente.
- * - Gera cobranças individuais por veículo para clientes sem plano.
- * - Bloqueia duplicidades e respeita adiamentos sem alterar o dia habitual futuro.
+ * - Bloqueia duplicidades contra cobranças individuais e cobranças históricas de plano, além de adiamentos.
  */
 export function planMonthlyCharges({
   month,
   clients,
   vehicles,
-  plans,
+  plans: _plans = [],
   charges,
 }: {
   month: string;
   clients: Client[];
   vehicles: Vehicle[];
-  plans: Plan[];
+  plans?: Plan[];
   charges: Charge[];
 }): MonthlyChargeGenerationPlan {
   if (!/^\d{4}-\d{2}$/.test(month)) {
@@ -631,135 +703,16 @@ export function planMonthlyCharges({
   const clientMap = new Map<string, Client>();
   clients.forEach((c) => clientMap.set(c.id, c));
 
-  const activeVehicles = vehicles.filter((v) => v.status === 'ativo');
-  const activePlans = plans.filter((p) => p.status === 'ativo');
+  const seenVehicleIds = new Set<string>();
+  const activeVehicles = vehicles.filter((v) => {
+    if (v.status !== 'ativo') return false;
+    if (seenVehicleIds.has(v.id)) return false;
+    seenVehicleIds.add(v.id);
+    return true;
+  });
 
-  const coveredVehicleIds = new Set<string>();
-  const planGroups = new Map<
-    string,
-    { clientId: string; planId: string; planName: string; planValue: number; vehicles: Vehicle[] }
-  >();
-
-  // 1A. Planos vinculados diretamente ao cliente (client.planId) — referência principal
-  for (const client of clients) {
-    if (client.status === 'inativo' || !client.planId) continue;
-    const plan = activePlans.find((p) => p.id === client.planId);
-    if (!plan) continue;
-
-    const clientVehicles = activeVehicles.filter((v) => v.clientId === client.id);
-    if (clientVehicles.length === 0) continue;
-
-    const key = `${client.id}__${plan.id}`;
-    planGroups.set(key, {
-      clientId: client.id,
-      planId: plan.id,
-      planName: plan.name || client.planName || 'Plano',
-      planValue: Number(plan.totalMonthlyValue) || 0,
-      vehicles: clientVehicles,
-    });
-    clientVehicles.forEach((v) => coveredVehicleIds.add(v.id));
-  }
-
-  // 1B. Fallback: veículos ativos vinculados via vehicle.planId
-  for (const v of activeVehicles) {
-    if (coveredVehicleIds.has(v.id)) continue;
-    if (v.planId) {
-      const key = `${v.clientId}__${v.planId}`;
-      const existing = planGroups.get(key);
-      if (existing) {
-        existing.vehicles.push(v);
-      } else {
-        const plan = activePlans.find((p) => p.id === v.planId);
-        planGroups.set(key, {
-          clientId: v.clientId,
-          planId: v.planId,
-          planName: plan?.name || v.planName || 'Plano',
-          planValue: Number(plan?.totalMonthlyValue ?? v.monthlyValue) || 0,
-          vehicles: [v],
-        });
-      }
-      coveredVehicleIds.add(v.id);
-    }
-  }
-
-  const standaloneVehicles = activeVehicles.filter((v) => !coveredVehicleIds.has(v.id));
-
-  // 2. Cobranças únicas consolidadas por plano
-  for (const [, group] of planGroups.entries()) {
-    const { clientId, planId, planName, planValue, vehicles: groupVehicles } = group;
-    const client = clientMap.get(clientId);
-
-    if (client?.status === 'inativo' || !isCompetenceEligibleForClient(month, client)) {
-      skippedCount++;
-      continue;
-    }
-
-    const firstVehicle = groupVehicles[0];
-    const groupVehicleIds = groupVehicles.map((v) => v.id);
-
-    const relatedPlanCharges = charges.filter(
-      (c) =>
-        c.status !== 'cancelado' &&
-        c.isPlanCharge &&
-        c.clientId === clientId &&
-        (c.planId === planId || c.referenceMonth === month)
-    );
-
-    if (isChargeBlockedByExistingOrPostponement(month, relatedPlanCharges)) {
-      skippedCount++;
-      continue;
-    }
-
-    const clientName = client?.name || 'Cliente';
-    const dueDate = getSafeDueDate(targetYear, targetMonthIndex, firstVehicle.dueDay || 10);
-    const platesList = groupVehicles.map((v) => v.plate);
-    const deterministicPlanChargeId = `chg_plan_${clientId}_${planId}_${month}`.replace(
-      /[^a-zA-Z0-9_-]/g,
-      '_'
-    );
-
-    const supersededChargeIds = charges
-      .filter(
-        (c) =>
-          !c.isPlanCharge &&
-          c.referenceMonth === month &&
-          c.status === 'pendente' &&
-          (c.paidAmount || 0) === 0 &&
-          (c.clientId === clientId || groupVehicleIds.includes(c.vehicleId))
-      )
-      .map((c) => c.id);
-
-    chargesToCreate.push({
-      deterministicId: deterministicPlanChargeId,
-      data: {
-        clientId,
-        clientName,
-        vehicleId: firstVehicle.id,
-        vehiclePlate: platesList.join(', '),
-        vehicleModel: `${groupVehicles.length} veículo(s) vinculados`,
-        referenceMonth: month,
-        originalMonthlyValue: planValue,
-        previousBalanceCarried: 0,
-        discount: 0,
-        addition: 0,
-        totalAmount: planValue,
-        paidAmount: 0,
-        remainingBalance: planValue,
-        dueDate,
-        status: 'pendente',
-        balanceHandling: 'none',
-        isPlanCharge: true,
-        planId,
-        planName,
-        vehicleIds: groupVehicleIds,
-        vehiclePlates: platesList,
-      },
-      supersededChargeIds,
-    });
-  }
-
-  // 3. Cobranças individuais por veículo para clientes sem plano
-  for (const vehicle of standaloneVehicles) {
+  // Geração 100% individual por veículo ativo
+  for (const vehicle of activeVehicles) {
     const client = clientMap.get(vehicle.clientId);
 
     if (client?.status === 'inativo' || !isCompetenceEligibleForClient(month, client)) {
@@ -767,9 +720,8 @@ export function planMonthlyCharges({
       continue;
     }
 
-    const relatedVehicleCharges = charges.filter(
-      (c) => c.status !== 'cancelado' && !c.isPlanCharge && c.vehicleId === vehicle.id
-    );
+    // Proteção de duplicidade considerando tanto cobranças individuais quanto históricas de planos (`isPlanCharge`)
+    const relatedVehicleCharges = charges.filter((c) => doesChargeCoverVehicle(c, vehicle));
 
     if (isChargeBlockedByExistingOrPostponement(month, relatedVehicleCharges)) {
       skippedCount++;
@@ -778,12 +730,20 @@ export function planMonthlyCharges({
 
     const clientName = client?.name || 'Cliente';
     const prevCharges = charges.filter(
-      (c) => c.vehicleId === vehicle.id && c.remainingBalance > 0 && c.balanceHandling === 'next_month'
+      (c) =>
+        c.status !== 'cancelado' &&
+        c.vehicleId === vehicle.id &&
+        c.referenceMonth < month &&
+        Number(c.remainingBalance) > 0 &&
+        c.balanceHandling === 'next_month'
     );
-    const carriedBalance = prevCharges.reduce((sum, item) => sum + item.remainingBalance, 0);
+    const carriedBalance = roundCurrencyValue(
+      prevCharges.reduce((sum, item) => sum + (Number(item.remainingBalance) || 0), 0)
+    );
 
+    const originalMonthlyValue = Math.max(0, roundCurrencyValue(Number(vehicle.monthlyValue) || 0));
     const dueDate = getSafeDueDate(targetYear, targetMonthIndex, vehicle.dueDay || 10);
-    const totalAmount = Number(vehicle.monthlyValue) + carriedBalance;
+    const totalAmount = roundCurrencyValue(originalMonthlyValue + carriedBalance);
     const deterministicVehChargeId = `chg_veh_${vehicle.id}_${month}`.replace(/[^a-zA-Z0-9_-]/g, '_');
 
     chargesToCreate.push({
@@ -793,9 +753,9 @@ export function planMonthlyCharges({
         clientName,
         vehicleId: vehicle.id,
         vehiclePlate: vehicle.plate,
-        vehicleModel: `${vehicle.brand} ${vehicle.model}`,
+        vehicleModel: `${vehicle.brand} ${vehicle.model}`.trim(),
         referenceMonth: month,
-        originalMonthlyValue: Number(vehicle.monthlyValue),
+        originalMonthlyValue,
         previousBalanceCarried: carriedBalance,
         discount: 0,
         addition: 0,

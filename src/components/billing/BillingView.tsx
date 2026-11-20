@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { Charge, Payment, Client, Vehicle } from '../../types';
 import { useData } from '../../context/DataContext';
+import { FinancialValidationError } from '../../lib/financialTransactions';
 import { PaymentModal } from './PaymentModal';
 import { ConsolidatedPaymentModal } from './ConsolidatedPaymentModal';
 import { ReceiptModal } from '../receipts/ReceiptModal';
@@ -76,6 +77,7 @@ export const BillingView: React.FC<BillingViewProps> = ({ onNavigate }) => {
   const [chargeToPostpone, setChargeToPostpone] = useState<Charge | null>(null);
 
   const [isGenerating, setIsGenerating] = useState(false);
+  const isGeneratingRef = useRef(false);
   const [generateResult, setGenerateResult] = useState<string | null>(null);
   const [postponeFeedback, setPostponeFeedback] = useState<{
     message: string;
@@ -120,6 +122,8 @@ export const BillingView: React.FC<BillingViewProps> = ({ onNavigate }) => {
 
   // Monthly batch generator handler
   const handleGenerateMonthly = async () => {
+    if (isGeneratingRef.current) return;
+    isGeneratingRef.current = true;
     try {
       setIsGenerating(true);
       const res = await generateMonthlyCharges(selectedMonth);
@@ -129,8 +133,9 @@ export const BillingView: React.FC<BillingViewProps> = ({ onNavigate }) => {
       setTimeout(() => setGenerateResult(null), 5000);
     } catch (err) {
       console.error('Error generating charges:', err);
-      alert('Erro ao gerar mensalidades do mês.');
+      alert(err instanceof FinancialValidationError ? err.message : 'Erro ao gerar mensalidades do mês.');
     } finally {
+      isGeneratingRef.current = false;
       setIsGenerating(false);
     }
   };

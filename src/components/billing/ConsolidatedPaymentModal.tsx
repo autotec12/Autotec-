@@ -1,7 +1,8 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useData } from '../../context/DataContext';
 import { Charge, Payment, PaymentMethod } from '../../types';
 import { formatCurrency, getTodayIsoDate } from '../../lib/calculations';
+import { FinancialValidationError, createOperationId } from '../../lib/financialTransactions';
 import { CurrencyInput } from '../common/CurrencyInput';
 import { ClientSearchSelect } from '../common/ClientSearchSelect';
 import {
@@ -56,6 +57,8 @@ export const ConsolidatedPaymentModal: React.FC<ConsolidatedPaymentModalProps> =
   const [notes, setNotes] = useState<string>('');
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const submittingRef = useRef(false);
+  const operationIdRef = useRef<string>(createOperationId('pay_cons'));
 
   // Unpaid charges for selected client
   const clientPendingCharges = useMemo(() => {
@@ -122,9 +125,29 @@ export const ConsolidatedPaymentModal: React.FC<ConsolidatedPaymentModalProps> =
   }, [selectedCharges, paymentMode, partialAmount, totalSelectedDue]);
 
   const totalToReceive = distribution.reduce((acc, d) => acc + d.allocated, 0);
+  const selectedIdsSignature = useMemo(
+    () => selectedCharges.map((c) => c.id).join(','),
+    [selectedCharges]
+  );
+
+  useEffect(() => {
+    if (!submittingRef.current) {
+      operationIdRef.current = createOperationId('pay_cons');
+    }
+  }, [
+    selectedClientId,
+    competenceFilter,
+    selectedIdsSignature,
+    paymentMode,
+    partialAmount,
+    paymentDate,
+    paymentMethod,
+    notes,
+  ]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submittingRef.current) return;
     setErrorMsg('');
 
     if (!selectedClientId) {
@@ -148,6 +171,12 @@ export const ConsolidatedPaymentModal: React.FC<ConsolidatedPaymentModalProps> =
         amountToPay: d.allocated,
       }));
 
+    if (itemsToPay.length === 0) {
+      setErrorMsg('Selecione ao menos uma mensalidade com valor maior que zero.');
+      return;
+    }
+
+    submittingRef.current = true;
     try {
       setSubmitting(true);
       const createdPayment = await recordConsolidatedPayment({
@@ -157,13 +186,18 @@ export const ConsolidatedPaymentModal: React.FC<ConsolidatedPaymentModalProps> =
         paymentDate,
         paymentMethod,
         notes,
+        operationId: operationIdRef.current,
       });
       onSuccess(createdPayment, selectedCharges[0]);
     } catch (err: any) {
       console.error('Erro no recebimento consolidado:', err);
-      setErrorMsg(err.message || 'Falha ao registrar recebimento consolidado.');
-    } finally {
+      submittingRef.current = false;
       setSubmitting(false);
+      setErrorMsg(
+        err instanceof FinancialValidationError || err?.message
+          ? err.message
+          : 'Falha ao registrar recebimento consolidado.'
+      );
     }
   };
 
