@@ -1,9 +1,17 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Charge, Client, Vehicle, PaymentMethod, BalanceHandling, Payment } from '../../types';
 import { useData } from '../../context/DataContext';
-import { formatCurrency } from '../../lib/calculations';
+import {
+  formatCurrency,
+  formatDate,
+  getChargeRemainingBalance,
+  getCompetenceLabel,
+  getTodayIsoDate,
+  isEarlyPaymentDate,
+  roundCurrencyValue,
+} from '../../lib/calculations';
 import { FinancialValidationError, createOperationId } from '../../lib/financialTransactions';
-import { DollarSign, X, CheckCircle, AlertTriangle, Calendar } from 'lucide-react';
+import { DollarSign, X, CheckCircle, AlertTriangle, Calendar, CalendarCheck2 } from 'lucide-react';
 
 interface PaymentModalProps {
   charge: Charge;
@@ -19,8 +27,10 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
   onSuccess,
 }) => {
   const { recordPayment } = useData();
+  const effectiveRemaining = getChargeRemainingBalance(charge);
 
-  const [amountStr, setAmountStr] = useState<string>(String(charge.remainingBalance));
+  const [amountStr, setAmountStr] = useState<string>(String(effectiveRemaining));
+  const [paymentDate, setPaymentDate] = useState<string>(getTodayIsoDate());
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('pix');
   const [notes, setNotes] = useState<string>('');
   const [balanceHandling, setBalanceHandling] = useState<BalanceHandling>('specific_date');
@@ -36,12 +46,13 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
     if (!submittingRef.current) {
       operationIdRef.current = createOperationId('pay');
     }
-  }, [charge.id, amountStr, paymentMethod, balanceHandling, scheduledDate, notes]);
+  }, [charge.id, amountStr, paymentDate, paymentMethod, balanceHandling, scheduledDate, notes]);
 
-  const numAmount = parseFloat(amountStr.replace(',', '.')) || 0;
-  const remainingCalculated = Math.max(0, charge.remainingBalance - numAmount);
-  const isPartial = numAmount > 0 && numAmount < charge.remainingBalance;
-  const isOverpaying = numAmount > charge.remainingBalance;
+  const numAmount = roundCurrencyValue(parseFloat(amountStr.replace(',', '.')) || 0);
+  const remainingCalculated = Math.max(0, roundCurrencyValue(effectiveRemaining - numAmount));
+  const isPartial = numAmount > 0 && numAmount < effectiveRemaining - 0.009;
+  const isOverpaying = numAmount > effectiveRemaining + 0.009;
+  const isEarlyPayment = isEarlyPaymentDate(paymentDate, charge.dueDate);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -52,7 +63,11 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
       return;
     }
     if (isOverpaying) {
-      setErrorMessage(`O valor informado (${formatCurrency(numAmount)}) é maior que o saldo pendente (${formatCurrency(charge.remainingBalance)}).`);
+      setErrorMessage(`O valor informado (${formatCurrency(numAmount)}) é maior que o saldo pendente (${formatCurrency(effectiveRemaining)}).`);
+      return;
+    }
+    if (!paymentDate || !/^\d{4}-\d{2}-\d{2}$/.test(paymentDate)) {
+      setErrorMessage('Informe uma data válida de recebimento.');
       return;
     }
 
@@ -64,6 +79,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
       const payment = await recordPayment({
         charge,
         amount: numAmount,
+        paymentDate,
         paymentMethod,
         notes: notes.trim() || '',
         balanceHandling: isPartial ? balanceHandling : 'none',
@@ -120,6 +136,12 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
           {/* Charge Summary Box */}
           <div className="p-3.5 bg-[#F8F9FA] border border-[#E2E4E0] rounded-xl space-y-2 text-xs">
             <div className="flex justify-between text-slate-600">
+              <span>Competência / Vencimento Original:</span>
+              <span className="font-bold text-[#30334F]">
+                {getCompetenceLabel(charge.referenceMonth) || charge.referenceMonth} • {formatDate(charge.dueDate)}
+              </span>
+            </div>
+            <div className="flex justify-between text-slate-600">
               <span>Valor Contratado Original:</span>
               <span className="font-bold text-[#30334F]">{formatCurrency(charge.originalMonthlyValue)}</span>
             </div>
@@ -139,9 +161,18 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
             </div>
             <div className="pt-2 border-t border-[#E2E4E0] flex justify-between text-sm">
               <span className="font-bold text-slate-700">Saldo Atual a Pagar:</span>
-              <span className="font-black text-[#F28C1B]">{formatCurrency(charge.remainingBalance)}</span>
+              <span className="font-black text-[#F28C1B]">{formatCurrency(effectiveRemaining)}</span>
             </div>
           </div>
+
+          {isEarlyPayment && (
+            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-900 flex items-start gap-2">
+              <CalendarCheck2 className="w-4 h-4 shrink-0 mt-0.5 text-emerald-600" />
+              <span>
+                <strong>Baixa antecipada:</strong> recebimento registrado antes do vencimento original ({formatDate(charge.dueDate)}). O vencimento e a competência serão preservados integralmente.
+              </span>
+            </div>
+          )}
 
           {/* Amount Input */}
           <div>
@@ -156,7 +187,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                 type="number"
                 step="0.01"
                 min="0.01"
-                max={charge.remainingBalance}
+                max={effectiveRemaining}
                 value={amountStr}
                 onChange={(e) => setAmountStr(e.target.value)}
                 required
@@ -167,40 +198,58 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
             <div className="flex gap-2 mt-2">
               <button
                 type="button"
-                onClick={() => setAmountStr(String(charge.remainingBalance))}
+                onClick={() => setAmountStr(String(effectiveRemaining))}
                 className="text-xs px-2.5 py-1 rounded-md bg-[#30334F]/10 text-[#30334F] border border-[#30334F]/20 hover:bg-[#30334F]/20 font-bold transition"
               >
-                Quitação Total ({formatCurrency(charge.remainingBalance)})
+                Quitação Total ({formatCurrency(effectiveRemaining)})
               </button>
-              {charge.remainingBalance > 50 && (
+              {effectiveRemaining > 50 && (
                 <button
                   type="button"
-                  onClick={() => setAmountStr(String((charge.remainingBalance / 2).toFixed(2)))}
+                  onClick={() => setAmountStr(String((effectiveRemaining / 2).toFixed(2)))}
                   className="text-xs px-2.5 py-1 rounded-md bg-[#F3F4F2] text-slate-700 border border-[#DCE0D9] hover:bg-[#E2E4E0] font-semibold transition"
                 >
-                  Metade 50% ({formatCurrency(charge.remainingBalance / 2)})
+                  Metade 50% ({formatCurrency(effectiveRemaining / 2)})
                 </button>
               )}
             </div>
           </div>
 
-          {/* Payment Method */}
-          <div>
-            <label className="block text-xs font-bold text-[#30334F] mb-1.5">
-              Forma de Pagamento *
-            </label>
-            <select
-              value={paymentMethod}
-              onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
-              className="w-full bg-[#F8F9FA] border border-[#DCE0D9] rounded-xl px-3.5 py-2.5 text-sm text-[#1E2235] font-semibold focus:outline-hidden focus:border-[#30334F] focus:bg-white"
-            >
-              <option value="pix">PIX Instantâneo</option>
-              <option value="dinheiro">Dinheiro em Espécie</option>
-              <option value="cartao_credito">Cartão de Crédito</option>
-              <option value="cartao_debito">Cartão de Débito</option>
-              <option value="boleto">Boleto Bancário</option>
-              <option value="transferencia">Transferência Bancária (TED/DOC)</option>
-            </select>
+          {/* Payment Date & Method */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-bold text-[#30334F] mb-1.5">
+                Data do Pagamento (Caixa Real) *
+              </label>
+              <div className="relative">
+                <Calendar className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="date"
+                  value={paymentDate}
+                  onChange={(e) => setPaymentDate(e.target.value)}
+                  required
+                  className="w-full bg-[#F8F9FA] border border-[#DCE0D9] rounded-xl pl-9 pr-3 py-2.5 text-sm text-[#1E2235] font-semibold focus:outline-hidden focus:border-[#30334F] focus:bg-white"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-[#30334F] mb-1.5">
+                Forma de Pagamento *
+              </label>
+              <select
+                value={paymentMethod}
+                onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
+                className="w-full bg-[#F8F9FA] border border-[#DCE0D9] rounded-xl px-3.5 py-2.5 text-sm text-[#1E2235] font-semibold focus:outline-hidden focus:border-[#30334F] focus:bg-white"
+              >
+                <option value="pix">PIX Instantâneo</option>
+                <option value="dinheiro">Dinheiro em Espécie</option>
+                <option value="cartao_credito">Cartão de Crédito</option>
+                <option value="cartao_debito">Cartão de Débito</option>
+                <option value="boleto">Boleto Bancário</option>
+                <option value="transferencia">Transferência Bancária (TED/DOC)</option>
+              </select>
+            </div>
           </div>
 
           {/* PARTIAL PAYMENT LOGIC */}

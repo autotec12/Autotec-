@@ -11,8 +11,56 @@ import {
   Technician,
   TechnicianPayment,
 } from '../types';
-import { formatCurrency, formatDate, formatDateTime } from './calculations';
+import {
+  formatCurrency,
+  formatDate,
+  formatDateTime,
+  getChargeRemainingBalance,
+  getCompetenceLabel,
+  getPaymentAmountForCharge,
+  getPaymentsForCharge,
+  getTodayIsoDate,
+  isEarlyPaymentDate,
+  normalizeIsoDate,
+  roundCurrencyValue,
+} from './calculations';
 import { AUTOTEC_LOGO_ORIGINAL_DATA_URI } from '../assets/autotecLogos';
+
+function createPdfDoc(options: { orientation?: 'p' | 'portrait' | 'l' | 'landscape'; unit?: 'pt' | 'px' | 'in' | 'mm' | 'cm' | 'ex' | 'em' | 'pc'; format?: string | number[] }): jsPDF {
+  const Ctor = (typeof jsPDF === 'function' ? jsPDF : (jsPDF as any)?.jsPDF) as any;
+  return new Ctor(options) as jsPDF;
+}
+
+function runAutoTable(doc: jsPDF, options: Parameters<typeof autoTable>[1]): void {
+  const fn = (typeof autoTable === 'function' ? autoTable : (autoTable as any)?.default) as typeof autoTable;
+  fn(doc, options);
+}
+
+/**
+ * Monta as linhas de veículos do recibo consolidado (SVG/PDF) sem valores individuais por veículo.
+ */
+export function buildConsolidatedReceiptVehicleRows(
+  payment: Payment,
+  allCharges?: Charge[]
+): string[][] {
+  const items = payment.consolidatedItems || [];
+  const chargeById = new Map<string, Charge>();
+  (allCharges || []).forEach((c) => chargeById.set(c.id, c));
+
+  return items.map((item) => {
+    const resolvedDue = item.dueDate || chargeById.get(item.chargeId)?.dueDate || '';
+    const isItemPaid =
+      item.statusAfterOperation === 'pago' || Number(item.remainingAfterOperation || 0) <= 0.009;
+    const isItemEarly = isEarlyPaymentDate(payment.paymentDate, resolvedDue);
+    return [
+      item.vehiclePlate,
+      item.vehicleModel || 'Veículo',
+      item.referenceMonth,
+      resolvedDue ? formatDate(resolvedDue) : '-',
+      isItemPaid ? (isItemEarly ? 'QUITADO (ANTECIP.)' : 'QUITADO') : 'PARCIAL',
+    ];
+  });
+}
 
 // Corporate Palette
 const COLOR_NAVY = [48, 51, 79]; // #30334F
@@ -129,7 +177,8 @@ export function generateMonthlyPaymentReceiptPdf(
   charge: Charge,
   client?: Client,
   vehicle?: Vehicle,
-  company?: CompanySettings
+  company?: CompanySettings,
+  allCharges?: Charge[]
 ): Blob {
   const effectiveCompany: CompanySettings = {
     id: 'default',
@@ -149,13 +198,184 @@ export function generateMonthlyPaymentReceiptPdf(
     ...(payment.companySnapshot || {}),
   };
 
-  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const doc = createPdfDoc({ orientation: 'portrait', unit: 'mm', format: 'a4' });
   const pageWidth = doc.internal.pageSize.getWidth();
-
   const receiptNum = payment.receiptNumber || `REC-${Date.now()}`;
+
+  // =========================================================================
+  // RAMO CONSOLIDADO (múltiplos veículos — SEM exibir valores individuais por veículo)
+  // =========================================================================
+  if (payment.isConsolidated && payment.consolidatedItems && payment.consolidatedItems.length > 0) {
+    let startY = drawHeader(
+      doc,
+      'Recibo Oficial de Recebimento Consolidado',
+      effectiveCompany,
+      `Nº ${receiptNum}`
+    );
+
+    const items = payment.consolidatedItems;
+    const chargeById = new Map<string, Charge>();
+    (allCharges || []).forEach((c) => chargeById.set(c.id, c));
+
+    const clientName = client?.name || payment.clientName || charge.clientName || 'Cliente';
+    const clientDoc = client?.document || 'Não informado';
+    const clientPhone = client?.whatsapp || client?.phone || 'Não informado';
+
+    const totalConsolidated = roundCurrencyValue(
+      items.reduce((acc, it) => acc + (Number(it.originalAmount) || 0), 0)
+    );
+    const totalReceived = roundCurrencyValue(Number(payment.amount || 0));
+    const totalRemaining = roundCurrencyValue(Number(payment.remainingAfterPayment ?? 0));
+    const isPaid = totalRemaining <= 0.009;
+    const hasEarlyItems = items.some((it) => {
+      const due = it.dueDate || chargeById.get(it.chargeId)?.dueDate;
+      return isEarlyPaymentDate(payment.paymentDate, due);
+    });
+
+    doc.setFillColor(COLOR_GRAY_BG[0], COLOR_GRAY_BG[1], COLOR_GRAY_BG[2]);
+    doc.roundedRect(14, startY, pageWidth - 28, 36, 2, 2, 'F');
+    doc.setDrawColor(226, 232, 240);
+    doc.roundedRect(14, startY, pageWidth - 28, 36, 2, 2, 'S');
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.setTextColor(COLOR_ORANGE[0], COLOR_ORANGE[1], COLOR_ORANGE[2]);
+    doc.text('DADOS DO CLIENTE / PAGADOR', 18, startY + 6);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.setTextColor(COLOR_TEXT[0], COLOR_TEXT[1], COLOR_TEXT[2]);
+    doc.text(clientName, 18, startY + 13);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(COLOR_MUTED[0], COLOR_MUTED[1], COLOR_MUTED[2]);
+    doc.text(`CPF / CNPJ: ${clientDoc}`, 18, startY + 19);
+    doc.text(`Telefone / WhatsApp: ${clientPhone}`, 18, startY + 24);
+    doc.text(`Mensalidades incluídas: ${items.length}`, 18, startY + 29);
+
+    doc.line(pageWidth / 2, startY + 4, pageWidth / 2, startY + 32);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.setTextColor(COLOR_ORANGE[0], COLOR_ORANGE[1], COLOR_ORANGE[2]);
+    doc.text('DADOS DO RECEBIMENTO', pageWidth / 2 + 6, startY + 6);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9.5);
+    doc.setTextColor(22, 101, 52);
+    doc.text(`Data do Pagamento: ${formatDate(payment.paymentDate || payment.createdAt)}`, pageWidth / 2 + 6, startY + 13);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(COLOR_MUTED[0], COLOR_MUTED[1], COLOR_MUTED[2]);
+    doc.text(`Forma: ${(payment.paymentMethod || 'PIX').toUpperCase()}`, pageWidth / 2 + 6, startY + 19);
+    doc.text(`Registro / Emissão: ${formatDateTime(payment.createdAt || payment.paymentDate)}`, pageWidth / 2 + 6, startY + 24);
+    doc.text(`Operador: ${payment.operatorName || 'Operador Autorizado'}`, pageWidth / 2 + 6, startY + 29);
+
+    startY += 42;
+
+    if (isPaid) {
+      doc.setFillColor(220, 252, 231);
+      doc.roundedRect(14, startY, pageWidth - 28, 10, 2, 2, 'F');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8.5);
+      doc.setTextColor(22, 101, 52);
+      doc.text(
+        hasEarlyItems
+          ? '✓ STATUS CONSOLIDADO: QUITADO INTEGRALMENTE (BAIXA ANTECIPADA — VENCIMENTOS ORIGINAIS PRESERVADOS)'
+          : '✓ STATUS CONSOLIDADO: TOTALMENTE PAGO E QUITADO',
+        18,
+        startY + 6.5
+      );
+    } else {
+      doc.setFillColor(254, 243, 199);
+      doc.roundedRect(14, startY, pageWidth - 28, 10, 2, 2, 'F');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8.5);
+      doc.setTextColor(146, 64, 14);
+      doc.text(
+        `⚠ STATUS CONSOLIDADO: PAGAMENTO PARCIAL (SALDO RESTANTE CONSOLIDADO: ${formatCurrency(totalRemaining)})`,
+        18,
+        startY + 6.5
+      );
+    }
+
+    startY += 15;
+
+    // Tabela de veículos contemplados SEM valores individuais por veículo
+    const vehicleRows = buildConsolidatedReceiptVehicleRows(payment, allCharges);
+
+    runAutoTable(doc, {
+      startY,
+      head: [['PLACA', 'VEÍCULO', 'COMPETÊNCIA', 'VENCIMENTO ORIGINAL', 'SITUAÇÃO']],
+      body: vehicleRows,
+      theme: 'grid',
+      headStyles: {
+        fillColor: [48, 51, 79],
+        textColor: [255, 255, 255],
+        fontStyle: 'bold',
+        fontSize: 8,
+      },
+      bodyStyles: {
+        fontSize: 8,
+        textColor: [30, 41, 59],
+      },
+      columnStyles: {
+        0: { fontStyle: 'bold', cellWidth: 28 },
+        1: { cellWidth: 'auto' },
+        2: { halign: 'center', cellWidth: 28 },
+        3: { halign: 'center', cellWidth: 36 },
+        4: { halign: 'center', fontStyle: 'bold', cellWidth: 36 },
+      },
+    });
+
+    const totalsStartY = (doc as any).lastAutoTable.finalY + 8;
+
+    runAutoTable(doc, {
+      startY: totalsStartY,
+      head: [['RESUMO FINANCEIRO CONSOLIDADO', 'VALOR (R$)']],
+      body: [
+        ['Valor Total Consolidado das Mensalidades', formatCurrency(totalConsolidated)],
+        ['Total Efetivamente Recebido Neste Recibo', formatCurrency(totalReceived)],
+        ['Saldo Restante Consolidado em Aberto', formatCurrency(totalRemaining)],
+      ],
+      theme: 'grid',
+      headStyles: {
+        fillColor: [48, 51, 79],
+        textColor: [255, 255, 255],
+        fontStyle: 'bold',
+        fontSize: 8.5,
+      },
+      bodyStyles: {
+        fontSize: 8.5,
+        textColor: [30, 41, 59],
+      },
+      columnStyles: {
+        0: { cellWidth: 'auto' },
+        1: { cellWidth: 50, halign: 'right', fontStyle: 'bold' },
+      },
+      didParseCell: (data) => {
+        if (data.row.index === 1) {
+          data.cell.styles.fillColor = [236, 253, 245];
+          data.cell.styles.textColor = [4, 120, 87];
+        }
+        if (data.row.index === 2 && totalRemaining > 0.009) {
+          data.cell.styles.fillColor = [255, 251, 235];
+          data.cell.styles.textColor = [180, 83, 9];
+        }
+      },
+    });
+
+    drawFooter(doc, effectiveCompany);
+    return doc.output('blob');
+  }
+
+  // =========================================================================
+  // RAMO INDIVIDUAL (mensalidade única)
+  // =========================================================================
   let startY = drawHeader(doc, 'Recibo Oficial de Pagamento de Mensalidade', effectiveCompany, `Nº ${receiptNum}`);
 
-  // Resolve Real Data (Eliminate empty or undefined values)
   const clientName = client?.name || payment.clientName || charge.clientName || 'Cliente';
   const clientDoc = client?.document || 'Não informado';
   const clientPhone = client?.whatsapp || client?.phone || 'Não informado';
@@ -164,15 +384,18 @@ export function generateMonthlyPaymentReceiptPdf(
   const vehicleDesc = vehicle
     ? `${vehicle.brand} ${vehicle.model} (${vehicle.color || 'Cor Padrão'})`
     : charge.vehicleModel || 'Veículo Cadastrado';
-  const planName = vehicle?.planDescription || 'Plano de Rastreamento Veicular';
   const refMonth = charge.referenceMonth || 'Mensalidade Vigente';
+  const refMonthLabel = getCompetenceLabel(refMonth) || refMonth;
 
   const originalVal = Number(charge.originalMonthlyValue ?? charge.totalAmount ?? payment.amount ?? 0);
   const prevBalanceVal = Number(charge.previousBalanceCarried || 0);
   const totalChargeVal = Number(charge.totalAmount || (originalVal + prevBalanceVal));
   const paidVal = Number(payment.amount || 0);
-  const remainingVal = Number(payment.remainingAfterPayment || Math.max(0, totalChargeVal - paidVal));
+  const remainingVal = roundCurrencyValue(
+    Number(payment.remainingAfterPayment ?? Math.max(0, totalChargeVal - paidVal))
+  );
   const isPaid = remainingVal <= 0.009;
+  const isEarly = isEarlyPaymentDate(payment.paymentDate, charge.dueDate);
 
   // Box: Client and Vehicle Information
   doc.setFillColor(COLOR_GRAY_BG[0], COLOR_GRAY_BG[1], COLOR_GRAY_BG[2]);
@@ -196,7 +419,7 @@ export function generateMonthlyPaymentReceiptPdf(
   doc.setTextColor(COLOR_MUTED[0], COLOR_MUTED[1], COLOR_MUTED[2]);
   doc.text(`CPF / CNPJ: ${clientDoc}`, 18, startY + 19);
   doc.text(`Telefone / WhatsApp: ${clientPhone}`, 18, startY + 24);
-  doc.text(`Data de Emissão: ${formatDateTime(payment.paymentDate || payment.createdAt)}`, 18, startY + 29);
+  doc.text(`Data do Pagamento: ${formatDate(payment.paymentDate || payment.createdAt)}`, 18, startY + 29);
 
   // Vertical divider inside box
   doc.line(pageWidth / 2, startY + 4, pageWidth / 2, startY + 32);
@@ -216,8 +439,8 @@ export function generateMonthlyPaymentReceiptPdf(
   doc.setFontSize(8);
   doc.setTextColor(COLOR_MUTED[0], COLOR_MUTED[1], COLOR_MUTED[2]);
   doc.text(`Modelo: ${vehicleDesc}`, pageWidth / 2 + 6, startY + 19);
-  doc.text(`Plano: ${planName}`, pageWidth / 2 + 6, startY + 24);
-  doc.text(`Mês de Referência: ${refMonth}`, pageWidth / 2 + 6, startY + 29);
+  doc.text(`Competência: ${refMonthLabel}`, pageWidth / 2 + 6, startY + 24);
+  doc.text(`Vencimento Original: ${formatDate(charge.dueDate)}`, pageWidth / 2 + 6, startY + 29);
 
   startY += 42;
 
@@ -228,14 +451,24 @@ export function generateMonthlyPaymentReceiptPdf(
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(8.5);
     doc.setTextColor(22, 101, 52); // Emerald 800
-    doc.text('✓ STATUS DA COBRANÇA: TOTALMENTE PAGA E QUITADA', 18, startY + 6.5);
+    doc.text(
+      isEarly
+        ? '✓ STATUS DA COBRANÇA: TOTALMENTE PAGA E QUITADA (BAIXA ANTECIPADA)'
+        : '✓ STATUS DA COBRANÇA: TOTALMENTE PAGA E QUITADA',
+      18,
+      startY + 6.5
+    );
   } else {
     doc.setFillColor(254, 243, 199); // Light amber
     doc.roundedRect(14, startY, pageWidth - 28, 10, 2, 2, 'F');
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(8.5);
     doc.setTextColor(146, 64, 14); // Amber 800
-    doc.text(`⚠ STATUS DA COBRANÇA: PAGAMENTO PARCIAL (SALDO RESTANTE: ${formatCurrency(remainingVal)})`, 18, startY + 6.5);
+    doc.text(
+      `⚠ STATUS DA COBRANÇA: PAGAMENTO PARCIAL${isEarly ? ' ANTECIPADO' : ''} (SALDO RESTANTE: ${formatCurrency(remainingVal)})`,
+      18,
+      startY + 6.5
+    );
   }
 
   startY += 15;
@@ -290,9 +523,9 @@ export function generateMonthlyPaymentReceiptPdf(
 
   // Payment Details Card
   doc.setFillColor(COLOR_GRAY_BG[0], COLOR_GRAY_BG[1], COLOR_GRAY_BG[2]);
-  doc.roundedRect(14, finalY, pageWidth - 28, 26, 2, 2, 'F');
+  doc.roundedRect(14, finalY, pageWidth - 28, 28, 2, 2, 'F');
   doc.setDrawColor(226, 232, 240);
-  doc.roundedRect(14, finalY, pageWidth - 28, 26, 2, 2, 'S');
+  doc.roundedRect(14, finalY, pageWidth - 28, 28, 2, 2, 'S');
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8.5);
@@ -304,10 +537,10 @@ export function generateMonthlyPaymentReceiptPdf(
   doc.setTextColor(COLOR_MUTED[0], COLOR_MUTED[1], COLOR_MUTED[2]);
   doc.text(`Forma de Liquidação: ${payment.paymentMethod ? payment.paymentMethod.toUpperCase() : 'PIX'}`, 18, finalY + 12);
   doc.text(`Operador / Recebedor: ${payment.operatorName || 'Operador Autorizado'}`, 18, finalY + 17);
-  doc.text(`Data e Hora do Pagamento: ${formatDateTime(payment.paymentDate || payment.createdAt)}`, 18, finalY + 22);
+  doc.text(`Data do Pagamento: ${formatDate(payment.paymentDate || payment.createdAt)} • Registro: ${formatDateTime(payment.createdAt || payment.paymentDate)}`, 18, finalY + 22);
 
   if (charge.dueDate) {
-    doc.text(`Vencimento Original: ${formatDate(charge.dueDate)}`, pageWidth / 2 + 6, finalY + 12);
+    doc.text(`Vencimento Original: ${formatDate(charge.dueDate)} (${refMonth})`, pageWidth / 2 + 6, finalY + 12);
   }
   if (effectiveCompany.pixKey) {
     doc.text(`Chave PIX AUTOTEC: ${effectiveCompany.pixKey}`, pageWidth / 2 + 6, finalY + 17);
@@ -839,7 +1072,7 @@ export function generateMonthlyChargesReportPdf(
   filters: ReportFilterOptions
 ): Blob {
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = getTodayIsoDate();
 
   let startY = drawHeader(doc, 'Relatório Analítico de Mensalidades e Cobranças', company, `Período: ${filters.periodLabel}`);
 
@@ -855,18 +1088,27 @@ export function generateMonthlyChargesReportPdf(
   startY += 4;
 
   const rows = charges.map((c) => {
-    const isPaid = (c.remainingBalance <= 0.009) || (c.status === 'pago');
+    const remaining = getChargeRemainingBalance(c);
+    const normalizedDue = normalizeIsoDate(c.dueDate);
+    const isPaid = c.status === 'pago' || remaining <= 0.009;
     const isPartial = !isPaid && (c.paidAmount > 0 || c.status === 'parcial');
-    const isOverdue = !isPaid && !isPartial && (c.dueDate < todayStr);
+    const isOverdue = !isPaid && Boolean(normalizedDue) && normalizedDue < todayStr;
     const situation = isPaid ? 'PAGA' : isPartial ? 'PARCIAL' : isOverdue ? 'VENCIDA' : 'PENDENTE';
 
-    const linked = payments.filter((p) => p.chargeId === c.id).sort((a, b) => (a.paymentDate || '').localeCompare(b.paymentDate || ''));
+    const linked = getPaymentsForCharge(payments, c.id).sort((a, b) =>
+      (a.paymentDate || '').localeCompare(b.paymentDate || '')
+    );
     let paymentInfo = '-';
     if (isPaid) {
-      paymentInfo = linked.length > 0 ? `Pago em ${formatDate(linked[linked.length - 1].paymentDate)}` : 'Quitado';
+      const lastPay = linked[linked.length - 1];
+      const payDateStr = lastPay?.paymentDate || c.paymentDate;
+      const earlySuffix = isEarlyPaymentDate(payDateStr, c.dueDate) ? ' (Antecipado)' : '';
+      paymentInfo = payDateStr ? `Pago em ${formatDate(payDateStr)}${earlySuffix}` : 'Quitado';
     } else if (isPartial) {
       if (linked.length > 0) {
-        paymentInfo = linked.map((p) => `${formatDate(p.paymentDate)}: ${formatCurrency(p.amount)}`).join('; ');
+        paymentInfo = linked
+          .map((p) => `${formatDate(p.paymentDate)}: ${formatCurrency(getPaymentAmountForCharge(p, c.id))}`)
+          .join('; ');
       } else {
         paymentInfo = `Pago: ${formatCurrency(c.paidAmount)}`;
       }
@@ -880,7 +1122,7 @@ export function generateMonthlyChargesReportPdf(
       formatCurrency(c.originalMonthlyValue),
       formatCurrency(c.totalAmount),
       formatCurrency(c.paidAmount),
-      formatCurrency(c.remainingBalance),
+      formatCurrency(remaining),
       situation,
       paymentInfo,
     ];
@@ -889,7 +1131,7 @@ export function generateMonthlyChargesReportPdf(
   const totalOriginal = charges.reduce((acc, c) => acc + (c.originalMonthlyValue || 0), 0);
   const totalContracted = charges.reduce((acc, c) => acc + (c.totalAmount || 0), 0);
   const totalPaid = charges.reduce((acc, c) => acc + (c.paidAmount || 0), 0);
-  const totalRemaining = charges.reduce((acc, c) => acc + (c.remainingBalance || 0), 0);
+  const totalRemaining = charges.reduce((acc, c) => acc + getChargeRemainingBalance(c), 0);
 
   autoTable(doc, {
     startY,
@@ -1188,17 +1430,22 @@ export function generateClientDossierPdf(
 
   // 1. Tabela de Mensalidades
   const chargeRows = charges.map((c) => {
-    const isPaid = (c.remainingBalance <= 0.009) || (c.status === 'pago');
+    const remaining = getChargeRemainingBalance(c);
+    const normalizedDue = normalizeIsoDate(c.dueDate);
+    const isPaid = c.status === 'pago' || remaining <= 0.009;
     const isPartial = !isPaid && (c.paidAmount > 0 || c.status === 'parcial');
-    const isOverdue = !isPaid && !isPartial && (c.dueDate < todayStr);
+    const isOverdue = !isPaid && Boolean(normalizedDue) && normalizedDue < todayStr;
     const situation = isPaid ? 'PAGA' : isPartial ? 'PARCIAL' : isOverdue ? 'VENCIDA' : 'PENDENTE';
 
-    const linked = payments.filter((p) => p.chargeId === c.id);
+    const linked = getPaymentsForCharge(payments, c.id);
     let pInfo = '-';
     if (isPaid) {
-      pInfo = linked.length > 0 ? formatDate(linked[linked.length - 1].paymentDate) : 'Quitado';
+      const lastPayDate = linked.length > 0 ? linked[linked.length - 1].paymentDate : c.paymentDate;
+      pInfo = lastPayDate ? formatDate(lastPayDate) : 'Quitado';
     } else if (isPartial && linked.length > 0) {
-      pInfo = linked.map((p) => `${formatDate(p.paymentDate)} (${formatCurrency(p.amount)})`).join('; ');
+      pInfo = linked
+        .map((p) => `${formatDate(p.paymentDate)} (${formatCurrency(getPaymentAmountForCharge(p, c.id))})`)
+        .join('; ');
     }
 
     return [
@@ -1208,7 +1455,7 @@ export function generateClientDossierPdf(
       formatCurrency(c.originalMonthlyValue),
       formatCurrency(c.totalAmount),
       formatCurrency(c.paidAmount),
-      formatCurrency(c.remainingBalance),
+      formatCurrency(remaining),
       situation,
       pInfo,
     ];

@@ -1,10 +1,16 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Vehicle, VehicleType, VehicleStatus, Client } from '../../types';
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
 import { VehicleModal } from './VehicleModal';
 import { WhatsAppModal } from '../whatsapp/WhatsAppModal';
-import { formatCurrency, getCurrentMonthStr } from '../../lib/calculations';
+import { formatCurrency, getChargeRemainingBalance, getCurrentMonthStr } from '../../lib/calculations';
+import {
+  findOrphanHistoricalPlateReferences,
+  HISTORICAL_MISSING_CLIENT_LABEL,
+  normalizePlate,
+  normalizeSearchText,
+} from '../../lib/clientVehicleLookup';
 import {
   Car,
   Bike,
@@ -20,10 +26,11 @@ import {
   Clock,
   ShieldAlert,
   Radio,
+  History,
 } from 'lucide-react';
 
 export const VehiclesView: React.FC = () => {
-  const { vehicles, clients, charges, deleteVehicle } = useData();
+  const { vehicles, clients, charges, payments, technicalServices, deleteVehicle } = useData();
   const { isAdmin } = useAuth();
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -63,26 +70,41 @@ export const VehiclesView: React.FC = () => {
   const currentMonth = getCurrentMonthStr();
   const today = new Date().toISOString().split('T')[0];
 
-  // Filtering
+  // Filtering (supports normalized full/partial plate ignoring hyphen and spaces)
   const filteredVehicles = vehicles.filter((v) => {
     const client = clientsMap.get(v.clientId);
     const clientName = client?.name || '';
 
-    const term = searchTerm.toLowerCase().trim();
+    const term = normalizeSearchText(searchTerm);
+    const plateTerm = normalizePlate(searchTerm);
     const matchesSearch =
       !term ||
-      v.plate.toLowerCase().includes(term) ||
-      v.model.toLowerCase().includes(term) ||
-      v.brand.toLowerCase().includes(term) ||
-      (v.trackerModel && v.trackerModel.toLowerCase().includes(term)) ||
-      (v.trackerSerial && v.trackerSerial.toLowerCase().includes(term)) ||
-      clientName.toLowerCase().includes(term);
+      normalizeSearchText(v.plate).includes(term) ||
+      (plateTerm.length >= 2 && normalizePlate(v.plate).includes(plateTerm)) ||
+      normalizeSearchText(v.model).includes(term) ||
+      normalizeSearchText(v.brand).includes(term) ||
+      (v.trackerModel && normalizeSearchText(v.trackerModel).includes(term)) ||
+      (v.trackerSerial && normalizeSearchText(v.trackerSerial).includes(term)) ||
+      normalizeSearchText(clientName).includes(term);
 
     const matchesType = typeFilter === 'todos' || v.vehicleType === typeFilter;
     const matchesStatus = statusFilter === 'todos' || v.status === statusFilter;
 
     return matchesSearch && matchesType && matchesStatus;
   });
+
+  // Historical / orphan plate references when searching (e.g. deleted vehicle OCB5030)
+  const orphanHistoricalMatches = useMemo(() => {
+    if (searchTerm.trim().length < 2) return [];
+    return findOrphanHistoricalPlateReferences({
+      clients,
+      vehicles,
+      charges,
+      payments,
+      technicalServices,
+      searchTerm,
+    });
+  }, [clients, vehicles, charges, payments, technicalServices, searchTerm]);
 
   const handleDeleteConfirm = async () => {
     if (!vehicleToDelete) return;
@@ -118,10 +140,10 @@ export const VehiclesView: React.FC = () => {
         <div>
           <h2 className="text-xl font-black text-[#30334F] flex items-center gap-2">
             <Car className="w-6 h-6 text-[#F28C1B]" />
-            Veículos e Planos Contratados
+            Veículos & Contratos
           </h2>
           <p className="text-xs text-slate-500 mt-0.5">
-            Identificadores de contrato, valores de mensalidade contínua e vencimentos
+            Veículos vinculados a clientes titulares com mensalidade individual e vencimento próprio
           </p>
         </div>
 
@@ -243,7 +265,7 @@ export const VehiclesView: React.FC = () => {
                   <th className="px-4 py-3.5">Placa / Tipo</th>
                   <th className="px-4 py-3.5">Cliente Titular</th>
                   <th className="px-4 py-3.5">Veículo / Modelo</th>
-                  <th className="px-4 py-3.5">Plano & Valor Mensal</th>
+                  <th className="px-4 py-3.5">Serviço & Valor Mensal</th>
                   <th className="px-4 py-3.5">Dia Vencimento</th>
                   <th className="px-4 py-3.5">Situação Financeira</th>
                   <th className="px-4 py-3.5">Status</th>
@@ -257,8 +279,12 @@ export const VehiclesView: React.FC = () => {
                   // Calculate current financial status for this vehicle
                   const vehicleCharges = charges.filter((c) => c.vehicleId === vehicle.id && c.status !== 'cancelado');
                   const currentMonthCharge = vehicleCharges.find((c) => c.referenceMonth === currentMonth);
-                  const hasOverdue = vehicleCharges.some((c) => c.remainingBalance > 0 && c.dueDate < today);
-                  const hasPartial = vehicleCharges.some((c) => c.status === 'parcial' && c.remainingBalance > 0);
+                  const hasOverdue = vehicleCharges.some(
+                    (c) => c.status !== 'pago' && getChargeRemainingBalance(c) > 0.009 && c.dueDate < today
+                  );
+                  const hasPartial = vehicleCharges.some(
+                    (c) => c.status === 'parcial' && getChargeRemainingBalance(c) > 0.009
+                  );
 
                   return (
                     <tr key={vehicle.id} className="hover:bg-[#F8F9FB] transition">
@@ -282,7 +308,12 @@ export const VehiclesView: React.FC = () => {
                       {/* Client */}
                       <td className="px-4 py-3.5">
                         <div className="font-bold text-[#30334F]">
-                          {client?.name || <span className="text-rose-600">Cliente não localizado</span>}
+                          {client?.name || (
+                            <span className="inline-flex items-center gap-1 text-3xs px-2 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200 font-bold">
+                              <AlertTriangle className="w-3 h-3 shrink-0" />
+                              {HISTORICAL_MISSING_CLIENT_LABEL}
+                            </span>
+                          )}
                         </div>
                         <div className="text-2xs text-slate-500">
                           {client?.whatsapp || client?.phone || '-'}
@@ -436,6 +467,48 @@ export const VehiclesView: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Read-only Orphan / Historical Plate References */}
+      {orphanHistoricalMatches.length > 0 && (
+        <div className="bg-amber-50/70 border border-amber-300 rounded-2xl p-4 space-y-3 shadow-xs">
+          <div className="flex items-center gap-2">
+            <div className="p-2 bg-amber-100 text-amber-800 rounded-xl border border-amber-300">
+              <History className="w-4 h-4" />
+            </div>
+            <div>
+              <h3 className="text-sm font-black text-amber-950">
+                Referências Históricas Encontradas Fora do Cadastro Atual de Veículos ({orphanHistoricalMatches.length})
+              </h3>
+              <p className="text-2xs text-amber-900/80">
+                Estes registros constam apenas em cobranças ou ordens de serviço antigas e são exibidos somente para consulta histórica.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {orphanHistoricalMatches.map((group) => (
+              <div
+                key={group.key}
+                className="bg-white border border-amber-300 rounded-xl p-3.5 space-y-1.5 text-xs"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-mono font-black text-[#30334F] bg-amber-50 px-2 py-0.5 rounded border border-amber-300">
+                    {group.displayPlate}
+                  </span>
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-100 text-amber-950 border border-amber-300 text-3xs font-black">
+                    <AlertTriangle className="w-3 h-3 text-amber-700 shrink-0" />
+                    {group.badgeLabel}
+                  </span>
+                </div>
+                <div className="text-2xs text-slate-700">
+                  Nome histórico: <strong>{group.recordedClientName}</strong> • {group.charges.length} cobrança(s) •{' '}
+                  {group.payments.length} pagamento(s) • {group.technicalServices.length} O.S.
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* MODAL: Vehicle Edit / Create */}
       {isVehicleModalOpen && (

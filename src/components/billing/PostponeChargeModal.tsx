@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { Charge, ChargePostponementRecord } from '../../types';
 import { useData } from '../../context/DataContext';
 import {
@@ -50,6 +50,7 @@ export const PostponeChargeModal: React.FC<PostponeChargeModalProps> = ({
   const [newDueDate, setNewDueDate] = useState<string>(() => addOneMonthIso(currentDueDate));
   const [reason, setReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
 
   const originalDueDate = normalizeIsoDate(charge.originalDueDate) || currentDueDate;
@@ -58,6 +59,7 @@ export const PostponeChargeModal: React.FC<PostponeChargeModalProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submittingRef.current) return;
 
     if (!newDueDate || !/^\d{4}-\d{2}-\d{2}$/.test(newDueDate)) {
       setError('Selecione uma data completa válida (dia, mês e ano).');
@@ -70,17 +72,29 @@ export const PostponeChargeModal: React.FC<PostponeChargeModalProps> = ({
     }
 
     try {
+      submittingRef.current = true;
       setSubmitting(true);
       setError(null);
+      const trimmedReason = reason.trim();
       const record = await postponeCharge({
         chargeId: charge.id,
         newDueDate,
-        reason,
+        ...(trimmedReason ? { reason: trimmedReason } : {}),
       });
       onSuccess(record);
     } catch (err: any) {
       console.error('Erro ao adiar mensalidade:', err);
-      setError(err?.message || 'Não foi possível registrar o adiamento.');
+      let message = err?.message || 'Não foi possível registrar o adiamento.';
+      if (typeof message === 'string' && message.trim().startsWith('{')) {
+        try {
+          const parsed = JSON.parse(message);
+          if (parsed?.error) message = String(parsed.error);
+        } catch {
+          // keep original message
+        }
+      }
+      setError(message);
+      submittingRef.current = false;
       setSubmitting(false);
     }
   };

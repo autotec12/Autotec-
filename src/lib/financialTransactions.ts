@@ -1,6 +1,8 @@
 import {
   BalanceHandling,
+  CarriedBalanceSourceItem,
   Charge,
+  ChargePostponementRecord,
   Client,
   CompanySettings,
   ConsolidatedPaymentItem,
@@ -9,7 +11,13 @@ import {
   Plan,
   Vehicle,
 } from '../types';
-import { planMonthlyCharges } from './calculations';
+import {
+  getChargeEffectiveOpenBalance,
+  getPostponeEligibility,
+  isChargeEligibleForBalanceCarryOver,
+  normalizeIsoDate,
+  planMonthlyCharges,
+} from './calculations';
 
 export class FinancialValidationError extends Error {
   readonly code: string;
@@ -74,16 +82,32 @@ export function normalizeOperationId(rawId?: string, prefix = 'pay'): string {
   return trimmed;
 }
 
+function isPlainObject(value: unknown): value is Record<string, any> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value) || value instanceof Date) {
+    return false;
+  }
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
 export function stripUndefinedDeep<T>(obj: T): T {
-  if (obj === null || typeof obj !== 'object' || Array.isArray(obj) || obj instanceof Date) {
+  if (obj === null || obj === undefined || typeof obj !== 'object' || obj instanceof Date) {
+    return obj;
+  }
+  if (Array.isArray(obj)) {
+    return obj
+      .filter((item) => item !== undefined)
+      .map((item) => stripUndefinedDeep(item)) as unknown as T;
+  }
+  if (!isPlainObject(obj)) {
     return obj;
   }
   const cleaned: Record<string, any> = {};
-  for (const [key, val] of Object.entries(obj as Record<string, any>)) {
+  for (const [key, val] of Object.entries(obj)) {
     if (val === undefined) {
       continue;
     }
-    if (val !== null && typeof val === 'object' && !Array.isArray(val) && !(val instanceof Date)) {
+    if (Array.isArray(val) || isPlainObject(val)) {
       cleaned[key] = stripUndefinedDeep(val);
     } else {
       cleaned[key] = val;
@@ -92,14 +116,48 @@ export function stripUndefinedDeep<T>(obj: T): T {
   return cleaned as T;
 }
 
-function getLiveRemainingBalance(charge: Charge): number {
-  const raw = charge.remainingBalance as unknown;
-  if (raw !== undefined && raw !== null && raw !== '' && !Number.isNaN(Number(raw))) {
-    return Math.max(0, roundCurrency(Number(raw)));
+export function findUndefinedPaths(value: unknown, path = ''): string[] {
+  if (value === undefined) {
+    return [path || '<root>'];
   }
-  const total = roundCurrency(Number(charge.totalAmount) || 0);
-  const paid = roundCurrency(Number(charge.paidAmount) || 0);
-  return Math.max(0, roundCurrency(total - paid));
+  if (Array.isArray(value)) {
+    const paths: string[] = [];
+    for (let i = 0; i < value.length; i++) {
+      const itemPath = path ? `${path}[${i}]` : `[${i}]`;
+      paths.push(...findUndefinedPaths(value[i], itemPath));
+    }
+    return paths;
+  }
+  if (isPlainObject(value)) {
+    const paths: string[] = [];
+    for (const [key, val] of Object.entries(value)) {
+      const nextPath = path ? `${path}.${key}` : key;
+      paths.push(...findUndefinedPaths(val, nextPath));
+    }
+    return paths;
+  }
+  return [];
+}
+
+export function assertNoUndefinedDeep(value: unknown, contextLabel = 'documento'): void {
+  const invalidPaths = findUndefinedPaths(value);
+  if (invalidPaths.length > 0) {
+    throw new FinancialValidationError(
+      `Dados inválidos para gravação em ${contextLabel}: campo(s) indefinido(s) detectado(s) (${invalidPaths.join(', ')}).`,
+      'UNDEFINED_FIELD_VALUE'
+    );
+  }
+}
+
+function isBalanceAlreadyCarried(charge: Charge): boolean {
+  return (
+    charge.carriedBalanceConsumed === true ||
+    (typeof charge.carriedToChargeId === 'string' && charge.carriedToChargeId.trim().length > 0)
+  );
+}
+
+function getLiveRemainingBalance(charge: Charge): number {
+  return getChargeEffectiveOpenBalance(charge);
 }
 
 export interface CreateChargeIfAbsentResult {
@@ -189,6 +247,8 @@ export interface GenerateMonthlyChargesResult {
   skipped: number;
   createdIds: string[];
   supersededIds: string[];
+  carriedSourceIds: string[];
+  untransferredPlanChargeIds: string[];
 }
 
 export async function executeMonthlyChargeGeneration(
@@ -256,12 +316,21 @@ export async function executeMonthlyChargeGeneration(
         'INVALID_CHARGE_VALUES'
       );
     }
+    for (const srcId of item.carryOverSourceIds || []) {
+      if (!isValidFirestoreDocId(srcId)) {
+        throw new FinancialValidationError(
+          'Identificador de cobrança de origem inválido para transporte de saldo.',
+          'INVALID_CHARGE_ID'
+        );
+      }
+    }
   }
 
   let created = 0;
   let skipped = plan.skippedCount;
   const createdIds: string[] = [];
   const supersededIds: string[] = [];
+  const carriedSourceIds: string[] = [];
 
   if (plan.chargesToCreate.length === 0) {
     return {
@@ -269,15 +338,34 @@ export async function executeMonthlyChargeGeneration(
       skipped,
       createdIds,
       supersededIds,
+      carriedSourceIds,
+      untransferredPlanChargeIds: plan.untransferredPlanChargeIds,
     };
   }
 
-  // Até 200 itens por transação mantém leitura+escrita dentro do limite de 500 operações do Firestore
-  // e garante rollback atômico integral em lotes convencionais se houver falha no commit.
-  const TX_CHUNK_SIZE = 200;
+  // Agrupa itens em lotes respeitando o limite de 500 operações do Firestore,
+  // mantendo cada cobrança de destino e todas as suas cobranças de origem na MESMA transação atômica.
+  const MAX_WRITES_PER_TX = 200;
+  const chunks: typeof plan.chargesToCreate[] = [];
+  let currentChunk: typeof plan.chargesToCreate = [];
+  let currentChunkOps = 0;
 
-  for (let i = 0; i < plan.chargesToCreate.length; i += TX_CHUNK_SIZE) {
-    const chunk = plan.chargesToCreate.slice(i, i + TX_CHUNK_SIZE);
+  for (const item of plan.chargesToCreate) {
+    const itemOps =
+      1 + (item.carryOverSourceIds?.length || 0) + (item.supersededChargeIds?.length || 0);
+    if (currentChunk.length > 0 && currentChunkOps + itemOps > MAX_WRITES_PER_TX) {
+      chunks.push(currentChunk);
+      currentChunk = [];
+      currentChunkOps = 0;
+    }
+    currentChunk.push(item);
+    currentChunkOps += itemOps;
+  }
+  if (currentChunk.length > 0) {
+    chunks.push(currentChunk);
+  }
+
+  for (const chunk of chunks) {
     const txNow = now || new Date().toISOString();
 
     const chunkOutcome = await store.runTransaction(async (tx) => {
@@ -297,8 +385,21 @@ export async function executeMonthlyChargeGeneration(
         supSnapMap.set(supId, supSnapsList[idx]);
       });
 
+      const uniqueCarrySourceIds = Array.from(
+        new Set(chunk.flatMap((item) => item.carryOverSourceIds || []))
+      );
+      const carrySnapsList = await Promise.all(
+        uniqueCarrySourceIds.map((srcId) => tx.get<Charge>('charges', srcId))
+      );
+      const carrySnapMap = new Map<string, DocSnapLike<Charge>>();
+      uniqueCarrySourceIds.forEach((srcId, idx) => {
+        carrySnapMap.set(srcId, carrySnapsList[idx]);
+      });
+
       const localCreatedIds: string[] = [];
       const localSupersededIds: string[] = [];
+      const localCarriedSourceIds: string[] = [];
+      const consumedSourceIdsInTx = new Set<string>();
       let localSkipped = 0;
 
       // 2. Stage atomic writes only for charges that do not exist yet
@@ -311,23 +412,98 @@ export async function executeMonthlyChargeGeneration(
           continue;
         }
 
+        // Revalidação transacional contra o estado VIVO de cada cobrança de origem:
+        // garante consumo único, atomicidade e proteção contra concorrência e pagamentos intermediários.
+        const verifiedSources: CarriedBalanceSourceItem[] = [];
+        const sourceUpdatesToStage: { sourceId: string; amount: number }[] = [];
+
+        for (const srcId of item.carryOverSourceIds || []) {
+          if (consumedSourceIdsInTx.has(srcId)) continue;
+          const srcSnap = carrySnapMap.get(srcId);
+          if (!srcSnap || !srcSnap.exists()) continue;
+
+          const rawSrc = srcSnap.data()!;
+          const liveSrc: Charge = { ...rawSrc, id: rawSrc.id || srcSnap.id };
+
+          if (
+            !isChargeEligibleForBalanceCarryOver(
+              liveSrc,
+              { id: item.data.vehicleId, clientId: item.data.clientId },
+              month
+            )
+          ) {
+            continue;
+          }
+
+          const liveCarryAmount = getChargeEffectiveOpenBalance(liveSrc);
+          if (liveCarryAmount <= 0.009) continue;
+
+          consumedSourceIdsInTx.add(srcId);
+          verifiedSources.push({
+            sourceChargeId: liveSrc.id,
+            sourceReferenceMonth: liveSrc.referenceMonth,
+            amount: liveCarryAmount,
+          });
+          sourceUpdatesToStage.push({
+            sourceId: srcSnap.id,
+            amount: liveCarryAmount,
+          });
+        }
+
+        const liveCarriedBalance = roundCurrency(
+          verifiedSources.reduce((sum, s) => sum + s.amount, 0)
+        );
+        const originalMonthlyValue = roundCurrency(Number(item.data.originalMonthlyValue));
+        const discount = roundCurrency(Number(item.data.discount || 0));
+        const addition = roundCurrency(Number(item.data.addition || 0));
+        const totalAmount = Math.max(
+          0,
+          roundCurrency(originalMonthlyValue + liveCarriedBalance + addition - discount)
+        );
+        const paidAmount = roundCurrency(Number(item.data.paidAmount || 0));
+        const remainingBalance = Math.max(0, roundCurrency(totalAmount - paidAmount));
+
         const newCharge: Charge = {
           ...item.data,
           id: item.deterministicId,
-          originalMonthlyValue: roundCurrency(Number(item.data.originalMonthlyValue)),
-          previousBalanceCarried: roundCurrency(Number(item.data.previousBalanceCarried || 0)),
-          discount: roundCurrency(Number(item.data.discount || 0)),
-          addition: roundCurrency(Number(item.data.addition || 0)),
-          totalAmount: roundCurrency(Number(item.data.totalAmount)),
-          paidAmount: roundCurrency(Number(item.data.paidAmount || 0)),
-          remainingBalance: roundCurrency(Number(item.data.remainingBalance)),
+          originalMonthlyValue,
+          previousBalanceCarried: liveCarriedBalance,
+          carriedFromChargeIds:
+            verifiedSources.length > 0
+              ? verifiedSources.map((s) => s.sourceChargeId)
+              : undefined,
+          carriedBalanceSources:
+            verifiedSources.length > 0 ? verifiedSources : undefined,
+          discount,
+          addition,
+          totalAmount,
+          paidAmount,
+          remainingBalance,
           createdAt: txNow,
           updatedAt: txNow,
           createdBy,
         };
 
+        // Escrita atômica 1: criação da cobrança de destino com vínculo explícito às origens
         tx.set('charges', item.deterministicId, stripUndefinedDeep(newCharge));
         localCreatedIds.push(item.deterministicId);
+
+        // Escrita atômica 2: marcação de consumo na cobrança de origem sem apagar saldos históricos
+        for (const srcUpd of sourceUpdatesToStage) {
+          tx.update(
+            'charges',
+            srcUpd.sourceId,
+            stripUndefinedDeep({
+              carriedBalanceConsumed: true,
+              carriedToChargeId: item.deterministicId,
+              carriedToReferenceMonth: month,
+              carriedBalanceAmount: srcUpd.amount,
+              carriedBalanceAt: txNow,
+              updatedAt: txNow,
+            })
+          );
+          localCarriedSourceIds.push(srcUpd.sourceId);
+        }
 
         for (const supId of item.supersededChargeIds || []) {
           const supSnap = supSnapMap.get(supId);
@@ -357,6 +533,7 @@ export async function executeMonthlyChargeGeneration(
       return {
         createdIds: localCreatedIds,
         supersededIds: localSupersededIds,
+        carriedSourceIds: localCarriedSourceIds,
         skipped: localSkipped,
       };
     });
@@ -365,6 +542,7 @@ export async function executeMonthlyChargeGeneration(
     skipped += chunkOutcome.skipped;
     createdIds.push(...chunkOutcome.createdIds);
     supersededIds.push(...chunkOutcome.supersededIds);
+    carriedSourceIds.push(...chunkOutcome.carriedSourceIds);
   }
 
   return {
@@ -372,6 +550,8 @@ export async function executeMonthlyChargeGeneration(
     skipped,
     createdIds,
     supersededIds,
+    carriedSourceIds,
+    untransferredPlanChargeIds: plan.untransferredPlanChargeIds,
   };
 }
 
@@ -382,12 +562,63 @@ export interface RecordPaymentExecutionResult {
   newRemainingBalance: number;
 }
 
+function isValidCalendarDateString(dateStr: string): boolean {
+  const match = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return false;
+  const dt = new Date(Date.UTC(year, month - 1, day));
+  return (
+    dt.getUTCFullYear() === year &&
+    dt.getUTCMonth() === month - 1 &&
+    dt.getUTCDate() === day
+  );
+}
+
+/**
+ * Valida a data real do pagamento (aceita YYYY-MM-DD ou timestamp ISO válido).
+ * Regra de baixa antecipada: NUNCA bloqueia datas anteriores ao vencimento (`dueDate`).
+ */
+export function resolveValidPaymentDate(
+  paymentDate: string | undefined,
+  fallbackNowIso: string
+): string {
+  if (paymentDate === undefined || paymentDate === null || paymentDate.trim() === '') {
+    return fallbackNowIso;
+  }
+  const trimmed = paymentDate.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    if (!isValidCalendarDateString(trimmed)) {
+      throw new FinancialValidationError(
+        'Informe uma data de pagamento válida no formato AAAA-MM-DD.',
+        'INVALID_PAYMENT_DATE'
+      );
+    }
+    return trimmed;
+  }
+  // Aceita timestamp ISO completo (ex: 2026-11-20T14:30:00.000Z)
+  const isoPrefix = trimmed.slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}T/.test(trimmed) && isValidCalendarDateString(isoPrefix)) {
+    const parsed = new Date(trimmed);
+    if (!isNaN(parsed.getTime())) {
+      return trimmed;
+    }
+  }
+  throw new FinancialValidationError(
+    'Informe uma data de pagamento válida.',
+    'INVALID_PAYMENT_DATE'
+  );
+}
+
 export async function executeRecordPayment(
   store: FinancialStoreAdapter,
   params: {
     chargeId: string;
     amount: number;
     paymentMethod: PaymentMethod;
+    paymentDate?: string;
     notes?: string;
     balanceHandling?: BalanceHandling;
     balanceScheduledDate?: string;
@@ -403,6 +634,7 @@ export async function executeRecordPayment(
     chargeId,
     amount,
     paymentMethod,
+    paymentDate,
     notes,
     balanceHandling = 'none',
     balanceScheduledDate,
@@ -425,6 +657,9 @@ export async function executeRecordPayment(
       'INVALID_AMOUNT'
     );
   }
+
+  // Pré-validação de formato de data (permite livremente pagamento antecipado antes do vencimento)
+  const preValidatedDate = paymentDate !== undefined ? resolveValidPaymentDate(paymentDate, '') : undefined;
 
   const paymentId = normalizeOperationId(operationId, 'pay');
 
@@ -465,6 +700,13 @@ export async function executeRecordPayment(
     const currentPaid = roundCurrency(Number(liveCharge.paidAmount) || 0);
     const currentRemaining = getLiveRemainingBalance(liveCharge);
 
+    if (isBalanceAlreadyCarried(liveCharge) && currentRemaining <= 0.009) {
+      throw new FinancialValidationError(
+        `O saldo restante desta mensalidade já foi transportado para a competência ${liveCharge.carriedToReferenceMonth || liveCharge.carriedToChargeId}. Registre o pagamento na cobrança de destino.`,
+        'BALANCE_ALREADY_CARRIED'
+      );
+    }
+
     if (liveCharge.status === 'pago' || currentRemaining <= 0.009) {
       throw new FinancialValidationError(
         'Esta mensalidade já está quitada.',
@@ -486,6 +728,7 @@ export async function executeRecordPayment(
     const newStatus: Charge['status'] = isFullyPaid ? 'pago' : 'parcial';
 
     const txNow = now || new Date().toISOString();
+    const effectivePaymentDate = preValidatedDate || txNow;
     const txReceiptNumber =
       receiptNumber ||
       `REC-${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}-${Math.floor(1000 + Math.random() * 9000)}`;
@@ -498,7 +741,7 @@ export async function executeRecordPayment(
       vehicleId: liveCharge.vehicleId,
       vehiclePlate: liveCharge.vehiclePlate,
       amount: paymentValue,
-      paymentDate: txNow,
+      paymentDate: effectivePaymentDate,
       paymentMethod,
       operatorId,
       operatorName,
@@ -510,6 +753,7 @@ export async function executeRecordPayment(
     };
 
     // 4. Atomic writes (Payment creation + Charge balance/status update)
+    // Preserva integralmente dueDate, originalDueDate e referenceMonth originais da cobrança.
     tx.set('payments', paymentId, stripUndefinedDeep(paymentData));
     tx.update(
       'charges',
@@ -520,6 +764,7 @@ export async function executeRecordPayment(
         status: newStatus,
         balanceHandling: isFullyPaid ? 'none' : balanceHandling,
         balanceScheduledDate: isFullyPaid ? null : balanceScheduledDate || null,
+        paymentDate: effectivePaymentDate,
         updatedAt: txNow,
       })
     );
@@ -615,6 +860,12 @@ export async function executeRecordConsolidatedPayment(
     );
   }
 
+  // Valida formato de data de pagamento (nunca bloqueia baixa antecipada antes do vencimento)
+  const effectiveConsolidatedPaymentDate = resolveValidPaymentDate(
+    paymentDate,
+    now || new Date().toISOString()
+  );
+
   const paymentId = normalizeOperationId(operationId, 'pay_cons');
 
   return store.runTransaction(async (tx) => {
@@ -667,6 +918,13 @@ export async function executeRecordConsolidatedPayment(
 
       const currentRemaining = getLiveRemainingBalance(currentData);
 
+      if (isBalanceAlreadyCarried(currentData) && currentRemaining <= 0.009) {
+        throw new FinancialValidationError(
+          `O saldo restante da mensalidade do veículo ${currentData.vehiclePlate} (${currentData.referenceMonth}) já foi transportado para ${currentData.carriedToReferenceMonth || currentData.carriedToChargeId}.`,
+          'BALANCE_ALREADY_CARRIED'
+        );
+      }
+
       if (currentData.status === 'pago' || currentRemaining <= 0.009) {
         throw new FinancialValidationError(
           `A mensalidade do veículo ${currentData.vehiclePlate} (${currentData.referenceMonth}) já está quitada.`,
@@ -698,6 +956,7 @@ export async function executeRecordConsolidatedPayment(
         vehiclePlate: currentData.vehiclePlate,
         vehicleModel: currentData.vehicleModel || '',
         referenceMonth: currentData.referenceMonth,
+        dueDate: currentData.dueDate,
         originalAmount: totalChargeAmount,
         previousPaidAmount: currentPaid,
         paidInThisOperation: amountToPay,
@@ -705,6 +964,7 @@ export async function executeRecordConsolidatedPayment(
         statusAfterOperation: newStatus,
       });
 
+      // Preserva integralmente dueDate, originalDueDate e referenceMonth originais de cada cobrança.
       chargeUpdates.push({
         chargeId,
         updateData: stripUndefinedDeep({
@@ -712,7 +972,7 @@ export async function executeRecordConsolidatedPayment(
           remainingBalance: newRemaining,
           status: newStatus,
           balanceHandling: isFullyPaid ? 'none' : currentData.balanceHandling || 'none',
-          paymentDate,
+          paymentDate: effectiveConsolidatedPaymentDate,
           updatedAt: txNow,
         }),
       });
@@ -731,7 +991,7 @@ export async function executeRecordConsolidatedPayment(
       vehicleId: firstLiveCharge!.vehicleId,
       vehiclePlate: vehiclePlates.join(', '),
       amount: totalAmount,
-      paymentDate,
+      paymentDate: effectiveConsolidatedPaymentDate,
       paymentMethod,
       operatorId,
       operatorName,
@@ -751,6 +1011,216 @@ export async function executeRecordConsolidatedPayment(
     return {
       payment: consolidatedPayment,
       wasReplay: false,
+    };
+  });
+}
+
+export interface PostponeChargeParams {
+  chargeId: string;
+  newDueDate: string;
+  reason?: string;
+  operatorId?: string;
+  operatorName?: string;
+  now?: string;
+  referenceToday?: string;
+}
+
+export interface PostponeChargeResult {
+  record: ChargePostponementRecord;
+  charge: Charge;
+  updatePayload: Record<string, any>;
+}
+
+/**
+ * Adiamento transacional de mensalidade (leitura ao vivo + validação estrita + payload livre de undefined).
+ * Preserva integralmente competência (referenceMonth), valores, pagamentos, status e campos da Etapa A2.
+ */
+export async function executePostponeCharge(
+  store: FinancialStoreAdapter,
+  params: PostponeChargeParams
+): Promise<PostponeChargeResult> {
+  const { chargeId, newDueDate, reason, operatorId, operatorName, now, referenceToday } = params;
+
+  if (!isValidFirestoreDocId(chargeId)) {
+    throw new FinancialValidationError(
+      'Identificador da mensalidade ausente ou inválido para adiamento.',
+      'INVALID_CHARGE_ID'
+    );
+  }
+
+  const normalizedNewDate = normalizeIsoDate(newDueDate);
+  if (!normalizedNewDate || !isValidCalendarDateString(normalizedNewDate)) {
+    throw new FinancialValidationError(
+      'Informe uma nova data de vencimento válida para o adiamento (dia, mês e ano).',
+      'INVALID_NEW_DUE_DATE'
+    );
+  }
+
+  return store.runTransaction(async (tx) => {
+    const chargeSnap = await tx.get<Charge>('charges', chargeId);
+    if (!chargeSnap.exists()) {
+      throw new FinancialValidationError(
+        'Mensalidade não encontrada para adiamento.',
+        'CHARGE_NOT_FOUND'
+      );
+    }
+
+    const liveCharge = { ...chargeSnap.data()!, id: chargeSnap.data()!.id || chargeId };
+
+    // Validação rigorosa dos campos obrigatórios da cobrança (nunca inventar valores falsos)
+    const liveClientId =
+      typeof liveCharge.clientId === 'string' ? liveCharge.clientId.trim() : '';
+    if (!liveClientId) {
+      throw new FinancialValidationError(
+        'A mensalidade está sem identificador do cliente (clientId) e não pode ser adiada.',
+        'MISSING_REQUIRED_FIELD'
+      );
+    }
+
+    const liveClientName =
+      typeof liveCharge.clientName === 'string' ? liveCharge.clientName.trim() : '';
+    if (!liveClientName) {
+      throw new FinancialValidationError(
+        'A mensalidade está sem nome do cliente cadastrado e não pode ser adiada.',
+        'MISSING_REQUIRED_FIELD'
+      );
+    }
+
+    const liveReferenceMonth =
+      typeof liveCharge.referenceMonth === 'string' ? liveCharge.referenceMonth.trim() : '';
+    if (!/^\d{4}-\d{2}$/.test(liveReferenceMonth)) {
+      throw new FinancialValidationError(
+        'A mensalidade está sem competência válida (referenceMonth) e não pode ser adiada.',
+        'MISSING_REQUIRED_FIELD'
+      );
+    }
+
+    const currentDueDate = normalizeIsoDate(liveCharge.dueDate);
+    if (!currentDueDate || !isValidCalendarDateString(currentDueDate)) {
+      throw new FinancialValidationError(
+        'A mensalidade não possui data de vencimento válida (dueDate) para adiamento.',
+        'MISSING_REQUIRED_FIELD'
+      );
+    }
+
+    const eligibility = getPostponeEligibility(liveCharge, referenceToday);
+    if (!eligibility.allowed) {
+      throw new FinancialValidationError(
+        eligibility.reason || 'Esta mensalidade não pode ser adiada.',
+        'POSTPONE_NOT_ALLOWED'
+      );
+    }
+
+    if (normalizedNewDate === currentDueDate) {
+      throw new FinancialValidationError(
+        'A nova data de vencimento precisa ser diferente da data atual.',
+        'SAME_DUE_DATE'
+      );
+    }
+
+    const txNow = now || new Date().toISOString();
+    const existingOriginalDue = normalizeIsoDate(liveCharge.originalDueDate);
+    const originalDueDate =
+      existingOriginalDue && isValidCalendarDateString(existingOriginalDue)
+        ? existingOriginalDue
+        : currentDueDate;
+
+    const targetType: 'plano' | 'veiculo' = liveCharge.isPlanCharge ? 'plano' : 'veiculo';
+    const trimmedPlate =
+      typeof liveCharge.vehiclePlate === 'string' ? liveCharge.vehiclePlate.trim() : '';
+    const trimmedModel =
+      typeof liveCharge.vehicleModel === 'string' ? liveCharge.vehicleModel.trim() : '';
+    const trimmedPlanName =
+      typeof liveCharge.planName === 'string' ? liveCharge.planName.trim() : '';
+
+    const targetLabel = liveCharge.isPlanCharge
+      ? [trimmedPlanName || 'Plano', trimmedPlate ? `(${trimmedPlate})` : '']
+          .filter(Boolean)
+          .join(' ')
+      : [trimmedPlate, trimmedModel].filter(Boolean).join(' — ') || 'Veículo';
+
+    // Montagem limpa do registro de adiamento: campos opcionais só entram quando definidos e válidos
+    const postponementRecord: ChargePostponementRecord = {
+      id: `post_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      originalDueDate,
+      previousDueDate: currentDueDate,
+      newDueDate: normalizedNewDate,
+      referenceMonth: liveReferenceMonth,
+      clientId: liveClientId,
+      clientName: liveClientName,
+      targetType,
+      targetLabel,
+      postponedAt: txNow,
+    };
+
+    const trimmedPlanId =
+      typeof liveCharge.planId === 'string' ? liveCharge.planId.trim() : '';
+    if (trimmedPlanId) {
+      postponementRecord.planId = trimmedPlanId;
+    }
+
+    const trimmedVehicleId =
+      typeof liveCharge.vehicleId === 'string' ? liveCharge.vehicleId.trim() : '';
+    if (trimmedVehicleId) {
+      postponementRecord.vehicleId = trimmedVehicleId;
+    }
+
+    const trimmedOperatorId =
+      typeof operatorId === 'string' ? operatorId.trim() : '';
+    if (trimmedOperatorId) {
+      postponementRecord.operatorId = trimmedOperatorId;
+    }
+
+    const trimmedOperatorName =
+      typeof operatorName === 'string' ? operatorName.trim() : '';
+    if (trimmedOperatorName) {
+      postponementRecord.operatorName = trimmedOperatorName;
+    }
+
+    const trimmedReason = typeof reason === 'string' ? reason.trim() : '';
+    if (trimmedReason) {
+      postponementRecord.reason = trimmedReason;
+    }
+
+    const sanitizedExistingHistory: ChargePostponementRecord[] = Array.isArray(
+      liveCharge.postponementHistory
+    )
+      ? liveCharge.postponementHistory
+          .filter((entry): entry is ChargePostponementRecord => Boolean(entry && typeof entry === 'object'))
+          .map((entry) => stripUndefinedDeep(entry))
+      : [];
+
+    const nextHistory = [...sanitizedExistingHistory, postponementRecord];
+
+    const updatePayload = stripUndefinedDeep({
+      dueDate: normalizedNewDate,
+      originalDueDate,
+      isPostponed: true,
+      postponedAt: txNow,
+      postponementCount: nextHistory.length,
+      postponementHistory: nextHistory,
+      updatedAt: txNow,
+    });
+
+    assertNoUndefinedDeep(updatePayload, `charges/${chargeId}`);
+
+    tx.update('charges', chargeId, updatePayload);
+
+    const updatedCharge: Charge = {
+      ...liveCharge,
+      dueDate: normalizedNewDate,
+      originalDueDate,
+      isPostponed: true,
+      postponedAt: txNow,
+      postponementCount: nextHistory.length,
+      postponementHistory: nextHistory,
+      updatedAt: txNow,
+    };
+
+    return {
+      record: postponementRecord,
+      charge: updatedCharge,
+      updatePayload,
     };
   });
 }

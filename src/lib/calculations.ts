@@ -1,4 +1,12 @@
-import { Client, Vehicle, Charge, Payment, Plan, ClientConsolidatedFinancials } from '../types';
+import {
+  CarriedBalanceSourceItem,
+  Client,
+  Vehicle,
+  Charge,
+  Payment,
+  Plan,
+  ClientConsolidatedFinancials,
+} from '../types';
 
 export function roundCurrencyValue(value: number): number {
   const num = Number(value);
@@ -37,8 +45,14 @@ export function formatDate(dateStr: string | undefined | null): string {
 
 export function formatDateTime(dateStr: string | undefined | null): string {
   if (!dateStr) return '-';
+  const trimmed = dateStr.trim();
+  if (!trimmed) return '-';
+  // Evita deslocamento de fuso (UTC -> local) para strings somente data YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return formatDate(trimmed);
+  }
   try {
-    const d = new Date(dateStr);
+    const d = new Date(trimmed);
     if (!isNaN(d.getTime())) {
       return d.toLocaleString('pt-BR');
     }
@@ -57,6 +71,84 @@ export function normalizeIsoDate(dateStr?: string | null): string {
   const brMatch = trimmed.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
   if (brMatch) return `${brMatch[3]}-${brMatch[2]}-${brMatch[1]}`;
   return trimmed;
+}
+
+export function isValidIsoCalendarDate(dateStr?: string | null): boolean {
+  if (!dateStr || typeof dateStr !== 'string') return false;
+  const trimmed = dateStr.trim();
+  const match = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return false;
+  const check = new Date(Date.UTC(year, month - 1, day));
+  return (
+    check.getUTCFullYear() === year &&
+    check.getUTCMonth() === month - 1 &&
+    check.getUTCDate() === day
+  );
+}
+
+/**
+ * Extrai a data efetiva (YYYY-MM-DD) de um pagamento sem sofrer deslocamento de fuso.
+ */
+export function getPaymentEffectiveDate(
+  payment: Pick<Payment, 'paymentDate' | 'createdAt'>
+): string {
+  const fromPayment = normalizeIsoDate(payment.paymentDate);
+  if (isValidIsoCalendarDate(fromPayment)) return fromPayment;
+  const fromCreated = normalizeIsoDate(payment.createdAt);
+  if (isValidIsoCalendarDate(fromCreated)) return fromCreated;
+  return '';
+}
+
+/**
+ * Retorna true quando a data real de pagamento ocorre antes da data de vencimento original.
+ */
+export function isEarlyPaymentDate(
+  paymentDate?: string | null,
+  dueDate?: string | null
+): boolean {
+  const normPay = normalizeIsoDate(paymentDate);
+  const normDue = normalizeIsoDate(dueDate);
+  if (!isValidIsoCalendarDate(normPay) || !isValidIsoCalendarDate(normDue)) {
+    return false;
+  }
+  return normPay < normDue;
+}
+
+/**
+ * Verifica se um pagamento (individual ou consolidado) cobre a cobrança informada.
+ */
+export function doesPaymentCoverCharge(payment: Payment, chargeId: string): boolean {
+  if (!chargeId) return false;
+  if (payment.chargeId === chargeId) return true;
+  if (Array.isArray(payment.consolidatedItems)) {
+    return payment.consolidatedItems.some((item) => item.chargeId === chargeId);
+  }
+  return false;
+}
+
+/**
+ * Retorna todos os pagamentos (individuais ou consolidados) que cobrem a cobrança informada.
+ */
+export function getPaymentsForCharge(payments: Payment[], chargeId: string): Payment[] {
+  if (!chargeId) return [];
+  return payments.filter((p) => doesPaymentCoverCharge(p, chargeId));
+}
+
+/**
+ * Retorna o valor efetivamente aplicado por um pagamento a uma cobrança específica.
+ */
+export function getPaymentAmountForCharge(payment: Payment, chargeId: string): number {
+  if (!chargeId) return 0;
+  if (payment.isConsolidated && Array.isArray(payment.consolidatedItems)) {
+    const matched = payment.consolidatedItems.find((item) => item.chargeId === chargeId);
+    if (matched) return roundCurrencyValue(Number(matched.paidInThisOperation) || 0);
+    return 0;
+  }
+  return payment.chargeId === chargeId ? roundCurrencyValue(Number(payment.amount) || 0) : 0;
 }
 
 export function getTodayIsoDate(): string {
@@ -98,10 +190,13 @@ export function isDateToday(dueDate: string): boolean {
   return normalized === today;
 }
 
-export function getDaysDifference(dueDate: string): number {
+export function getDaysDifference(dueDate: string, referenceToday?: string): number {
   const normalized = normalizeIsoDate(dueDate);
   if (!normalized) return 0;
-  const today = new Date(getTodayIsoDate() + 'T00:00:00');
+  const baseToday = referenceToday && isValidIsoCalendarDate(referenceToday)
+    ? referenceToday
+    : getTodayIsoDate();
+  const today = new Date(baseToday + 'T00:00:00');
   const target = new Date(normalized + 'T00:00:00');
   const diffTime = target.getTime() - today.getTime();
   return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
@@ -137,10 +232,13 @@ export function calculateDashboardMetrics(
   clients: Client[],
   vehicles: Vehicle[],
   charges: Charge[],
-  payments: Payment[]
+  payments: Payment[],
+  referenceToday?: string
 ): DashboardMetrics {
-  const currentMonth = getCurrentMonthStr();
-  const today = getTodayIsoDate();
+  const today = referenceToday && isValidIsoCalendarDate(referenceToday)
+    ? referenceToday
+    : getTodayIsoDate();
+  const currentMonth = today.slice(0, 7);
 
   // Operational metrics
   const totalClients = clients.length;
@@ -173,10 +271,11 @@ export function calculateDashboardMetrics(
     }
   });
 
-  // Financial calculations
+  // Financial calculations: caixa contabilizado estritamente na data real de pagamento (paymentDate)
   let totalReceivedMonth = 0;
   payments.forEach((p) => {
-    if (p.paymentDate && p.paymentDate.startsWith(currentMonth)) {
+    const effectivePayDate = getPaymentEffectiveDate(p);
+    if (effectivePayDate && effectivePayDate.startsWith(currentMonth)) {
       totalReceivedMonth = roundCurrencyValue(totalReceivedMonth + (Number(p.amount) || 0));
     }
   });
@@ -192,15 +291,19 @@ export function calculateDashboardMetrics(
   const overdueCharges: Charge[] = [];
   const partialCharges: Charge[] = [];
 
-  charges.forEach((c) => {
+  const effectiveCharges = getEffectiveCharges(charges);
+
+  effectiveCharges.forEach((c) => {
     if (c.status === 'cancelado') return;
 
-    const remaining = roundCurrencyValue(Number(c.remainingBalance) || 0);
-    const isDue = c.dueDate < today && remaining > 0;
-    const isToday = c.dueDate === today && remaining > 0;
-    const isPendingOrPartial = (c.status === 'pendente' || c.status === 'parcial') && remaining > 0;
+    const remaining = getChargeEffectiveOpenBalance(c);
+    const normalizedDue = normalizeIsoDate(c.dueDate);
+    const isOpen = c.status !== 'pago' && remaining > 0.009;
+    const isDue = isOpen && Boolean(normalizedDue) && normalizedDue < today;
+    const isToday = isOpen && Boolean(normalizedDue) && normalizedDue === today;
+    const isPendingOrPartial = (c.status === 'pendente' || c.status === 'parcial') && remaining > 0.009;
 
-    if (remaining > 0) {
+    if (isOpen) {
       totalPendingBalance = roundCurrencyValue(totalPendingBalance + remaining);
     }
 
@@ -208,7 +311,7 @@ export function calculateDashboardMetrics(
       totalToReceiveMonth = roundCurrencyValue(totalToReceiveMonth + remaining);
     }
 
-    if (c.status === 'parcial' && remaining > 0) {
+    if (c.status === 'parcial' && remaining > 0.009) {
       totalPartialAmount = roundCurrencyValue(totalPartialAmount + remaining);
       partialCharges.push(c);
     }
@@ -219,8 +322,8 @@ export function calculateDashboardMetrics(
       overdueCharges.push(c);
     } else if (isToday) {
       dueTodayCharges.push(c);
-    } else if (c.dueDate > today && isPendingOrPartial) {
-      const diff = getDaysDifference(c.dueDate);
+    } else if (Boolean(normalizedDue) && normalizedDue > today && isPendingOrPartial) {
+      const diff = getDaysDifference(normalizedDue, today);
       if (diff <= 7) {
         upcomingCharges.push(c);
       }
@@ -228,7 +331,10 @@ export function calculateDashboardMetrics(
   });
 
   // Recent payments
-  const sortedPayments = [...payments].sort((a, b) => (b.paymentDate > a.paymentDate ? 1 : -1));
+  const sortedPayments = [...payments].sort((a, b) =>
+    getPaymentEffectiveDate(b).localeCompare(getPaymentEffectiveDate(a)) ||
+    (b.createdAt || '').localeCompare(a.createdAt || '')
+  );
   const recentPayments = sortedPayments.slice(0, 10);
 
   return {
@@ -259,11 +365,16 @@ export function calculateDashboardMetrics(
 export function consolidateClientFinancials(
   client: Client,
   allVehicles: Vehicle[],
-  allCharges: Charge[]
+  allCharges: Charge[],
+  referenceToday?: string
 ): ClientConsolidatedFinancials {
   const clientVehicles = allVehicles.filter((v) => v.clientId === client.id);
-  const clientCharges = allCharges.filter((c) => c.clientId === client.id && c.status !== 'cancelado');
-  const today = getTodayIsoDate();
+  const clientCharges = getEffectiveCharges(allCharges).filter(
+    (c) => c.clientId === client.id && c.status !== 'cancelado'
+  );
+  const today = referenceToday && isValidIsoCalendarDate(referenceToday)
+    ? referenceToday
+    : getTodayIsoDate();
 
   let totalMonthlyValue = 0;
   clientVehicles.forEach((v) => {
@@ -279,10 +390,11 @@ export function consolidateClientFinancials(
 
   clientCharges.forEach((c) => {
     totalReceived = roundCurrencyValue(totalReceived + (Number(c.paidAmount) || 0));
-    const remaining = roundCurrencyValue(Number(c.remainingBalance) || 0);
-    if (remaining > 0) {
+    const remaining = getChargeEffectiveOpenBalance(c);
+    const normalizedDue = normalizeIsoDate(c.dueDate);
+    if (c.status !== 'pago' && remaining > 0.009) {
       totalPending = roundCurrencyValue(totalPending + remaining);
-      if (c.dueDate < today) {
+      if (normalizedDue && normalizedDue < today) {
         totalOverdue = roundCurrencyValue(totalOverdue + remaining);
         isOverdue = true;
       }
@@ -299,6 +411,142 @@ export function consolidateClientFinancials(
     totalOverdue,
     charges: clientCharges.sort((a, b) => b.dueDate.localeCompare(a.dueDate)),
     isOverdue,
+  };
+}
+
+export interface MonthlyReportSummary {
+  filteredCharges: Charge[];
+  periodPayments: Payment[];
+  totalCharged: number;
+  totalReceivedInPeriod: number;
+  totalPending: number;
+  totalOverdue: number;
+}
+
+/**
+ * Calcula os dados consolidados do relatório de mensalidades para um intervalo de datas:
+ * - Inclui cobranças cujo vencimento ou competência esteja no período E também cobranças
+ *   que tiveram pagamento efetivo (`paymentDate`) dentro do período (baixa antecipada).
+ * - Contabiliza `totalReceivedInPeriod` estritamente pelos pagamentos cujo `paymentDate`
+ *   real está dentro de `[startDate, endDate]`, nunca antecipando receita não recebida.
+ * - Classifica inadimplência apenas para cobranças em aberto (`status !== 'pago'`) com
+ *   saldo > 0 e `dueDate < today`, garantindo que cobranças antecipadamente quitadas jamais
+ *   apareçam como inadimplentes.
+ */
+export function calculateMonthlyReportMetrics(params: {
+  charges: Charge[];
+  payments: Payment[];
+  startDate: string;
+  endDate: string;
+  clientId?: string;
+  statusFilter?: string;
+  referenceToday?: string;
+}): MonthlyReportSummary {
+  const {
+    charges,
+    payments,
+    startDate,
+    endDate,
+    clientId,
+    statusFilter = 'all',
+    referenceToday,
+  } = params;
+
+  const today =
+    referenceToday && isValidIsoCalendarDate(referenceToday)
+      ? referenceToday
+      : getTodayIsoDate();
+
+  const effectiveCharges = getEffectiveCharges(charges).filter((c) => c.status !== 'cancelado');
+
+  // Pagamentos cujo caixa real ocorreu dentro do intervalo [startDate, endDate]
+  const periodPayments = payments.filter((p) => {
+    if (clientId && p.clientId !== clientId) return false;
+    const payDate = getPaymentEffectiveDate(p);
+    if (!payDate) return false;
+    return payDate >= startDate && payDate <= endDate;
+  });
+
+  const chargeIdsPaidInPeriod = new Set<string>();
+  periodPayments.forEach((p) => {
+    if (p.isConsolidated && Array.isArray(p.consolidatedItems) && p.consolidatedItems.length > 0) {
+      p.consolidatedItems.forEach((item) => {
+        if (item.chargeId) chargeIdsPaidInPeriod.add(item.chargeId);
+      });
+    } else if (p.chargeId) {
+      chargeIdsPaidInPeriod.add(p.chargeId);
+    }
+  });
+
+  const startMonth = startDate.slice(0, 7);
+  const endMonth = endDate.slice(0, 7);
+
+  const filteredCharges = effectiveCharges.filter((c) => {
+    if (clientId && c.clientId !== clientId) return false;
+
+    const normalizedDue = normalizeIsoDate(c.dueDate);
+    const inPeriodByDue = Boolean(normalizedDue) && normalizedDue >= startDate && normalizedDue <= endDate;
+    const inPeriodByMonth =
+      Boolean(c.referenceMonth) && c.referenceMonth >= startMonth && c.referenceMonth <= endMonth;
+    const inPeriodByPayment = chargeIdsPaidInPeriod.has(c.id);
+
+    if (!inPeriodByDue && !inPeriodByMonth && !inPeriodByPayment) {
+      return false;
+    }
+
+    const remaining = getChargeEffectiveOpenBalance(c);
+    const isOverdue = c.status !== 'pago' && remaining > 0.009 && Boolean(normalizedDue) && normalizedDue < today;
+
+    if (statusFilter === 'overdue') {
+      return isOverdue;
+    }
+    if (statusFilter && statusFilter !== 'all') {
+      return c.status === statusFilter;
+    }
+    return true;
+  });
+
+  const filteredChargeIds = new Set(filteredCharges.map((c) => c.id));
+
+  // Total recebido real (caixa) no período correspondente às cobranças exibidas
+  let totalReceivedInPeriod = 0;
+  periodPayments.forEach((p) => {
+    if (p.isConsolidated && Array.isArray(p.consolidatedItems) && p.consolidatedItems.length > 0) {
+      p.consolidatedItems.forEach((item) => {
+        if (filteredChargeIds.has(item.chargeId)) {
+          totalReceivedInPeriod = roundCurrencyValue(
+            totalReceivedInPeriod + (Number(item.paidInThisOperation) || 0)
+          );
+        }
+      });
+    } else if (filteredChargeIds.has(p.chargeId)) {
+      totalReceivedInPeriod = roundCurrencyValue(totalReceivedInPeriod + (Number(p.amount) || 0));
+    }
+  });
+
+  let totalCharged = 0;
+  let totalPending = 0;
+  let totalOverdue = 0;
+
+  filteredCharges.forEach((c) => {
+    totalCharged = roundCurrencyValue(totalCharged + (Number(c.totalAmount) || 0));
+    const remaining = getChargeEffectiveOpenBalance(c);
+    if (c.status !== 'pago' && remaining > 0.009) {
+      totalPending = roundCurrencyValue(totalPending + remaining);
+      const normalizedDue = normalizeIsoDate(c.dueDate);
+      if (normalizedDue && normalizedDue < today) {
+        totalOverdue = roundCurrencyValue(totalOverdue + remaining);
+      }
+    }
+  });
+
+  return {
+    filteredCharges,
+    periodPayments,
+    totalCharged,
+    totalReceivedInPeriod,
+    totalPending,
+    totalOverdue,
   };
 }
 
@@ -340,20 +588,50 @@ export function getCompetenceLabel(competence: string): string {
 }
 
 /**
- * Filtra cobranças individuais pendentes e sem pagamento que já foram
- * substituídas por uma cobrança única de plano na mesma competência,
- * preservando integralmente cobranças pagas, parciais e de clientes sem plano.
+ * Filtra cobranças individuais pendentes, sem pagamento e não adiadas que já estão
+ * efetivamente cobertas por uma cobrança antiga de plano (`isPlanCharge`) para o MESMO
+ * veículo e a MESMA competência (`referenceMonth`).
+ *
+ * Correção Etapa A2:
+ * - Não compara apenas `clientId` + `referenceMonth`; verifica a cobertura real do veículo
+ *   usando `doesChargeCoverVehicle` (`vehicleId`, `vehicleIds`, `vehiclePlates`, `vehiclePlate`
+ *   e fallback conservador para planos legados sem lista explícita).
+ * - Nunca oculta cobranças individuais de veículos não contemplados pela cobrança de plano.
+ * - Preserva integralmente cobranças pagas, parciais, adiadas e de competências diferentes.
  */
 export function getEffectiveCharges(charges: Charge[]): Charge[] {
-  const planChargeKeys = new Set(
-    charges
-      .filter((c) => c.isPlanCharge && c.status !== 'cancelado')
-      .map((c) => `${c.clientId}__${c.referenceMonth}`)
-  );
+  const activePlanChargesByKey = new Map<string, Charge[]>();
+  for (const c of charges) {
+    if (c.isPlanCharge && c.status !== 'cancelado') {
+      const key = `${c.clientId}__${c.referenceMonth}`;
+      const list = activePlanChargesByKey.get(key);
+      if (list) {
+        list.push(c);
+      } else {
+        activePlanChargesByKey.set(key, [c]);
+      }
+    }
+  }
 
   return charges.filter((c) => {
-    if (!c.isPlanCharge && c.status === 'pendente' && (c.paidAmount || 0) === 0) {
-      if (planChargeKeys.has(`${c.clientId}__${c.referenceMonth}`)) {
+    if (
+      !c.isPlanCharge &&
+      !c.isPostponed &&
+      c.status === 'pendente' &&
+      roundCurrencyValue(Number(c.paidAmount) || 0) === 0
+    ) {
+      const key = `${c.clientId}__${c.referenceMonth}`;
+      const coveringPlans = activePlanChargesByKey.get(key);
+      if (
+        coveringPlans &&
+        coveringPlans.some((planCharge) =>
+          doesChargeCoverVehicle(planCharge, {
+            id: c.vehicleId,
+            clientId: c.clientId,
+            plate: c.vehiclePlate,
+          })
+        )
+      ) {
         return false;
       }
     }
@@ -422,10 +700,9 @@ export function getEffectiveBillingMonth(
 }
 
 /**
- * Calcula o saldo restante efetivo da cobrança com fallback seguro caso
- * remainingBalance não esteja preenchido ou esteja ausente no documento.
+ * Calcula o saldo restante bruto registrado no documento da cobrança, com fallback seguro.
  */
-export function getChargeRemainingBalance(
+export function getRawChargeRemainingBalance(
   charge: Pick<Charge, 'remainingBalance' | 'totalAmount' | 'paidAmount'>
 ): number {
   const rawRemaining = charge.remainingBalance as unknown;
@@ -435,11 +712,65 @@ export function getChargeRemainingBalance(
     rawRemaining !== '' &&
     !Number.isNaN(Number(rawRemaining))
   ) {
-    return Math.max(0, Number(rawRemaining));
+    return Math.max(0, roundCurrencyValue(Number(rawRemaining)));
   }
-  const total = Number(charge.totalAmount) || 0;
-  const paid = Number(charge.paidAmount) || 0;
-  return Math.max(0, total - paid);
+  const total = roundCurrencyValue(Number(charge.totalAmount) || 0);
+  const paid = roundCurrencyValue(Number(charge.paidAmount) || 0);
+  return Math.max(0, roundCurrencyValue(total - paid));
+}
+
+/**
+ * Retorna o saldo em aberto efetivamente cobrável de uma cobrança.
+ * Quando o saldo residual já foi formalmente transportado para outra competência
+ * (`carriedBalanceConsumed === true` ou `carriedToChargeId` preenchido), desconta o valor
+ * efetivamente transportado para evitar dupla contagem do saldo devedor, preservando
+ * intacto o `remainingBalance` histórico no documento de origem.
+ */
+export function getChargeEffectiveOpenBalance(
+  charge: Pick<
+    Charge,
+    | 'remainingBalance'
+    | 'totalAmount'
+    | 'paidAmount'
+    | 'carriedBalanceConsumed'
+    | 'carriedBalanceAmount'
+    | 'carriedToChargeId'
+  >
+): number {
+  const rawRemaining = getRawChargeRemainingBalance(charge);
+  const hasBeenCarried =
+    charge.carriedBalanceConsumed === true ||
+    (typeof charge.carriedToChargeId === 'string' && charge.carriedToChargeId.trim().length > 0);
+
+  if (hasBeenCarried) {
+    const carriedAmount =
+      charge.carriedBalanceAmount !== undefined &&
+      charge.carriedBalanceAmount !== null &&
+      !Number.isNaN(Number(charge.carriedBalanceAmount))
+        ? Math.max(0, roundCurrencyValue(Number(charge.carriedBalanceAmount)))
+        : rawRemaining;
+    return Math.max(0, roundCurrencyValue(rawRemaining - carriedAmount));
+  }
+
+  return rawRemaining;
+}
+
+/**
+ * Calcula o saldo restante efetivo da cobrança com fallback seguro caso
+ * remainingBalance não esteja preenchido e respeitando o consumo de saldo transportado.
+ */
+export function getChargeRemainingBalance(
+  charge: Pick<
+    Charge,
+    | 'remainingBalance'
+    | 'totalAmount'
+    | 'paidAmount'
+    | 'carriedBalanceConsumed'
+    | 'carriedBalanceAmount'
+    | 'carriedToChargeId'
+  >
+): number {
+  return getChargeEffectiveOpenBalance(charge);
 }
 
 /**
@@ -447,10 +778,20 @@ export function getChargeRemainingBalance(
  * (usada tanto pela interface quanto pela função de execução do adiamento):
  * 1. Vencimento igual ou anterior à data atual (America/Fortaleza)
  * 2. Status pendente ou parcial (não quitada e não cancelada)
- * 3. Saldo restante maior que zero
+ * 3. Saldo restante efetivo maior que zero (não transportado)
  */
 export function getPostponeEligibility(
-  charge: Pick<Charge, 'status' | 'remainingBalance' | 'totalAmount' | 'paidAmount' | 'dueDate'>,
+  charge: Pick<
+    Charge,
+    | 'status'
+    | 'remainingBalance'
+    | 'totalAmount'
+    | 'paidAmount'
+    | 'dueDate'
+    | 'carriedBalanceConsumed'
+    | 'carriedBalanceAmount'
+    | 'carriedToChargeId'
+  >,
   referenceToday?: string
 ): { allowed: boolean; reason?: string } {
   const today = normalizeIsoDate(referenceToday) || getTodayIsoDate();
@@ -494,7 +835,17 @@ export function getPostponeEligibility(
 }
 
 export function canPostponeCharge(
-  charge: Pick<Charge, 'status' | 'remainingBalance' | 'totalAmount' | 'paidAmount' | 'dueDate'>,
+  charge: Pick<
+    Charge,
+    | 'status'
+    | 'remainingBalance'
+    | 'totalAmount'
+    | 'paidAmount'
+    | 'dueDate'
+    | 'carriedBalanceConsumed'
+    | 'carriedBalanceAmount'
+    | 'carriedToChargeId'
+  >,
   referenceToday?: string
 ): boolean {
   return getPostponeEligibility(charge, referenceToday).allowed;
@@ -598,11 +949,13 @@ export interface PlannedChargeCreation {
   deterministicId: string;
   data: Omit<Charge, 'id' | 'createdAt' | 'updatedAt'>;
   supersededChargeIds: string[];
+  carryOverSourceIds: string[];
 }
 
 export interface MonthlyChargeGenerationPlan {
   chargesToCreate: PlannedChargeCreation[];
   skippedCount: number;
+  untransferredPlanChargeIds: string[];
 }
 
 /**
@@ -624,11 +977,11 @@ export function doesChargeCoverVehicle(
 ): boolean {
   if (charge.status === 'cancelado') return false;
 
-  if (charge.vehicleId === vehicle.id) {
+  if (vehicle.id && charge.vehicleId && charge.vehicleId === vehicle.id) {
     return true;
   }
 
-  if (Array.isArray(charge.vehicleIds) && charge.vehicleIds.includes(vehicle.id)) {
+  if (vehicle.id && Array.isArray(charge.vehicleIds) && charge.vehicleIds.includes(vehicle.id)) {
     return true;
   }
 
@@ -668,13 +1021,64 @@ export function doesChargeCoverVehicle(
 }
 
 /**
- * Motor puro de planejamento das mensalidades de uma competência (YYYY-MM) — ETAPA A:
+ * Verifica se uma cobrança de origem está elegível para transporte de saldo parcial
+ * (`balanceHandling === 'next_month'`) para uma nova cobrança individual do veículo.
+ *
+ * Regras da Etapa A2:
+ * - Nunca transporta cobranças canceladas ou quitadas.
+ * - Nunca atribui automaticamente saldo de cobrança antiga de plano (`isPlanCharge === true`)
+ *   ou cobrança multi-veículo a um único veículo.
+ * - Exige consumo único: bloqueia qualquer cobrança já marcada como `carriedBalanceConsumed`
+ *   ou já vinculada a uma cobrança de destino (`carriedToChargeId`).
+ * - Exige competência estritamente anterior (`referenceMonth < targetMonth`), mesmo cliente e mesmo veículo.
+ * - Preserva `specific_date`, `open_negotiation` e `none` sem transporte automático.
+ */
+export function isChargeEligibleForBalanceCarryOver(
+  charge: Pick<
+    Charge,
+    | 'id'
+    | 'status'
+    | 'isPlanCharge'
+    | 'clientId'
+    | 'vehicleId'
+    | 'vehicleIds'
+    | 'referenceMonth'
+    | 'balanceHandling'
+    | 'remainingBalance'
+    | 'totalAmount'
+    | 'paidAmount'
+    | 'carriedBalanceConsumed'
+    | 'carriedToChargeId'
+    | 'carriedBalanceAmount'
+  >,
+  vehicle: Pick<Vehicle, 'id' | 'clientId'>,
+  targetMonth: string
+): boolean {
+  if (charge.status === 'cancelado' || charge.status === 'pago') return false;
+  if (charge.isPlanCharge === true) return false;
+  if (Array.isArray(charge.vehicleIds) && charge.vehicleIds.length > 1) return false;
+  if (charge.clientId !== vehicle.clientId) return false;
+  if (!charge.vehicleId || charge.vehicleId !== vehicle.id) return false;
+  if (!charge.referenceMonth || charge.referenceMonth >= targetMonth) return false;
+  if (charge.balanceHandling !== 'next_month') return false;
+  if (charge.carriedBalanceConsumed === true) return false;
+  if (typeof charge.carriedToChargeId === 'string' && charge.carriedToChargeId.trim().length > 0) {
+    return false;
+  }
+
+  return getChargeEffectiveOpenBalance(charge) > 0.009;
+}
+
+/**
+ * Motor puro de planejamento das mensalidades de uma competência (YYYY-MM) — ETAPA A + A2:
  * - Gera cobranças exclusivamente individuais por veículo ativo (`chg_veh_{vehicleId}_{month}`),
  *   utilizando o `monthlyValue` e o `dueDay` próprios de cada veículo.
  * - Ignora agrupamento comercial por planos na criação de novas cobranças, preservando integralmente
  *   o histórico existente (inclusive cobranças históricas `isPlanCharge`, pagas, parciais ou adiadas).
  * - Respeita o início somente no mês seguinte ao cadastro do cliente.
  * - Bloqueia duplicidades contra cobranças individuais e cobranças históricas de plano, além de adiamentos.
+ * - Planeja transporte de saldo parcial (`next_month`) com rastreabilidade explícita origem -> destino,
+ *   consumo único e proteção contra atribuição automática de saldos de cobranças antigas de plano.
  */
 export function planMonthlyCharges({
   month,
@@ -703,6 +1107,36 @@ export function planMonthlyCharges({
   const clientMap = new Map<string, Client>();
   clients.forEach((c) => clientMap.set(c.id, c));
 
+  // Defesa em profundidade: identifica origens já referenciadas em qualquer cobrança ativa existente
+  const alreadyReferencedSourceIds = new Set<string>();
+  const untransferredPlanChargeIdsSet = new Set<string>();
+  for (const c of charges) {
+    if (c.status === 'cancelado') continue;
+    if (Array.isArray(c.carriedFromChargeIds)) {
+      for (const srcId of c.carriedFromChargeIds) {
+        if (srcId) alreadyReferencedSourceIds.add(srcId);
+      }
+    }
+    if (Array.isArray(c.carriedBalanceSources)) {
+      for (const src of c.carriedBalanceSources) {
+        if (src?.sourceChargeId) alreadyReferencedSourceIds.add(src.sourceChargeId);
+      }
+    }
+    // Identifica cobranças antigas de plano com saldo marcado para próximo mês que não podem
+    // ser atribuídas arbitrariamente a um único veículo (preservadas intactas).
+    if (
+      c.isPlanCharge === true &&
+      c.status !== 'pago' &&
+      c.referenceMonth < month &&
+      c.balanceHandling === 'next_month' &&
+      !c.carriedBalanceConsumed &&
+      !c.carriedToChargeId &&
+      getChargeEffectiveOpenBalance(c) > 0.009
+    ) {
+      untransferredPlanChargeIdsSet.add(c.id);
+    }
+  }
+
   const seenVehicleIds = new Set<string>();
   const activeVehicles = vehicles.filter((v) => {
     if (v.status !== 'ativo') return false;
@@ -729,16 +1163,22 @@ export function planMonthlyCharges({
     }
 
     const clientName = client?.name || 'Cliente';
-    const prevCharges = charges.filter(
-      (c) =>
-        c.status !== 'cancelado' &&
-        c.vehicleId === vehicle.id &&
-        c.referenceMonth < month &&
-        Number(c.remainingBalance) > 0 &&
-        c.balanceHandling === 'next_month'
-    );
+    const eligibleCarrySources = charges
+      .filter(
+        (c) =>
+          !alreadyReferencedSourceIds.has(c.id) &&
+          isChargeEligibleForBalanceCarryOver(c, vehicle, month)
+      )
+      .sort((a, b) => (a.referenceMonth || '').localeCompare(b.referenceMonth || ''));
+
+    const carriedBalanceSources: CarriedBalanceSourceItem[] = eligibleCarrySources.map((src) => ({
+      sourceChargeId: src.id,
+      sourceReferenceMonth: src.referenceMonth,
+      amount: getChargeEffectiveOpenBalance(src),
+    }));
+    const carryOverSourceIds = carriedBalanceSources.map((s) => s.sourceChargeId);
     const carriedBalance = roundCurrencyValue(
-      prevCharges.reduce((sum, item) => sum + (Number(item.remainingBalance) || 0), 0)
+      carriedBalanceSources.reduce((sum, item) => sum + item.amount, 0)
     );
 
     const originalMonthlyValue = Math.max(0, roundCurrencyValue(Number(vehicle.monthlyValue) || 0));
@@ -757,6 +1197,9 @@ export function planMonthlyCharges({
         referenceMonth: month,
         originalMonthlyValue,
         previousBalanceCarried: carriedBalance,
+        carriedFromChargeIds: carryOverSourceIds.length > 0 ? carryOverSourceIds : undefined,
+        carriedBalanceSources:
+          carriedBalanceSources.length > 0 ? carriedBalanceSources : undefined,
         discount: 0,
         addition: 0,
         totalAmount,
@@ -767,12 +1210,14 @@ export function planMonthlyCharges({
         balanceHandling: 'none',
       },
       supersededChargeIds: [],
+      carryOverSourceIds,
     });
   }
 
   return {
     chargesToCreate,
     skippedCount,
+    untransferredPlanChargeIds: Array.from(untransferredPlanChargeIdsSet),
   };
 }
 

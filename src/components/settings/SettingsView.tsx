@@ -4,6 +4,7 @@ import { useAuth, OFFICIAL_ADMIN_EMAIL } from '../../context/AuthContext';
 import { useSecurity } from '../../context/SecurityContext';
 import { formatDateTime } from '../../lib/calculations';
 import { AppInstallSection } from './AppInstallSection';
+import { ForensicAuditSection } from './ForensicAuditSection';
 import {
   Settings,
   Building,
@@ -22,12 +23,18 @@ import {
   Clock,
   ShieldCheck,
   Smartphone,
+  Search,
 } from 'lucide-react';
 
 export const SettingsView: React.FC = () => {
   const { companySettings, updateCompanySettings, auditLogs, seedDemoData } = useData();
   const { user, profile, isAdmin } = useAuth();
-  const { lockSystem, changePin, changePassword } = useSecurity();
+  const { isUnlocked, lockSystem, changePin, changePassword } = useSecurity();
+
+  const isForensicAuditAuthorized =
+    Boolean(user) &&
+    (user?.email || '').toLowerCase().trim() === OFFICIAL_ADMIN_EMAIL.toLowerCase() &&
+    isUnlocked === true;
 
   const [companyName, setCompanyName] = useState(companySettings.companyName || '');
   const [tradeName, setTradeName] = useState(companySettings.tradeName || '');
@@ -51,7 +58,7 @@ export const SettingsView: React.FC = () => {
   const [isDirty, setIsDirty] = useState(false);
   const [hasPendingRemoteUpdate, setHasPendingRemoteUpdate] = useState(false);
   const [seeding, setSeeding] = useState(false);
-  const [activeTab, setActiveTab] = useState<'empresa' | 'seguranca' | 'instalacao' | 'auditoria'>('empresa');
+  const [activeTab, setActiveTab] = useState<'empresa' | 'seguranca' | 'instalacao' | 'auditoria' | 'forense'>('empresa');
 
   // Segurança: Alteração de Senha
   const [currentPassword, setCurrentPassword] = useState('');
@@ -231,6 +238,20 @@ export const SettingsView: React.FC = () => {
           <History className="w-4 h-4 text-[#F28C1B]" />
           Trilha de Auditoria ({auditLogs.length})
         </button>
+
+        {isForensicAuditAuthorized && (
+          <button
+            onClick={() => setActiveTab('forense')}
+            className={`pb-3 flex items-center gap-2 transition border-b-2 cursor-pointer ${
+              activeTab === 'forense'
+                ? 'border-[#30334F] text-[#30334F]'
+                : 'border-transparent text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            <Search className="w-4 h-4 text-[#F28C1B]" />
+            Auditoria Forense (Leitura)
+          </button>
+        )}
       </div>
 
       {/* TAB 1: DADOS DA EMPRESA */}
@@ -992,6 +1013,9 @@ export const SettingsView: React.FC = () => {
 
       {/* TAB 4: INSTALAR APLICATIVO AUTOTEC (PWA) */}
       {activeTab === 'instalacao' && <AppInstallSection />}
+
+      {/* TAB 5 (TEMPORÁRIA): AUDITORIA FORENSE — SOMENTE LEITURA */}
+      {activeTab === 'forense' && isForensicAuditAuthorized && <ForensicAuditSection />}
     </div>
   );
 };

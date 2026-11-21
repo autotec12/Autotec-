@@ -43,8 +43,6 @@ import {
   getTodayIsoDate,
   getCompetenceLabel,
   formatDate,
-  getPostponeEligibility,
-  normalizeIsoDate,
 } from '../lib/calculations';
 import {
   FinancialStoreAdapter,
@@ -53,9 +51,11 @@ import {
   createOperationId,
   executeCreateChargeIfAbsent,
   executeMonthlyChargeGeneration,
+  executePostponeCharge,
   executeRecordConsolidatedPayment,
   executeRecordPayment,
 } from '../lib/financialTransactions';
+import { validateVehicleOwnershipAndDuplicity } from '../lib/clientVehicleLookup';
 
 export interface RefreshDataResult {
   ok: boolean;
@@ -124,6 +124,7 @@ interface DataContextType {
     charge: Charge;
     amount: number;
     paymentMethod: PaymentMethod;
+    paymentDate?: string;
     notes?: string;
     balanceHandling?: BalanceHandling;
     balanceScheduledDate?: string;
@@ -1004,8 +1005,14 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const deleteClient = async (id: string) => {
     try {
+      // Exclusão do cadastro do cliente preserva integralmente cobranças, pagamentos e recibos históricos
       await deleteDoc(doc(db, 'clients', id));
-      await logAudit('DELETE', 'Client', id, `Excluiu o cliente ID ${id}`);
+      await logAudit(
+        'DELETE',
+        'Client',
+        id,
+        `Excluiu o cadastro do cliente ID ${id} (histórico financeiro de cobranças, pagamentos e recibos preservado)`
+      );
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `clients/${id}`);
     }
@@ -1013,12 +1020,23 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // VEHICLE ACTIONS
   const addVehicle = async (data: Omit<Vehicle, 'id' | 'createdAt' | 'updatedAt'>) => {
+    const validation = validateVehicleOwnershipAndDuplicity({
+      clientId: data.clientId,
+      plate: data.plate,
+      clients,
+      vehicles,
+    });
+    if (!validation.ok) {
+      throw new Error(validation.error || 'Dados inválidos para cadastro de veículo.');
+    }
+
     const id = `veh_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     const now = new Date().toISOString();
+    const { planId: _ignoredPlanId, planName: _ignoredPlanName, ...restData } = data;
     const newVehicle: Vehicle = {
-      ...data,
+      ...restData,
       id,
-      plate: data.plate.toUpperCase().trim(),
+      plate: validation.formattedPlate || data.plate.toUpperCase().trim(),
       monthlyValue: Number(data.monthlyValue),
       dueDay: Number(data.dueDay),
       createdAt: now,
@@ -1027,7 +1045,12 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
     try {
       await setDoc(doc(db, 'vehicles', id), cleanFirestoreData(newVehicle));
-      await logAudit('CREATE', 'Vehicle', id, `Cadastrou veículo ${newVehicle.plate} (${newVehicle.model}) para o cliente ${data.clientId}`);
+      await logAudit(
+        'CREATE',
+        'Vehicle',
+        id,
+        `Cadastrou veículo ${newVehicle.plate} (${newVehicle.model}) vinculado ao cliente ${validation.ownerClient?.name || data.clientId}`
+      );
       return id;
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, `vehicles/${id}`);
@@ -1035,13 +1058,32 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const updateVehicle = async (id: string, data: Partial<Vehicle>) => {
+    const existingVehicle = vehicles.find((v) => v.id === id) || null;
+    const targetClientId = data.clientId !== undefined ? data.clientId : existingVehicle?.clientId || '';
+    const targetPlate = data.plate !== undefined ? data.plate : existingVehicle?.plate || '';
+
+    const validation = validateVehicleOwnershipAndDuplicity({
+      clientId: targetClientId,
+      plate: targetPlate,
+      clients,
+      vehicles,
+      editingVehicle: existingVehicle,
+      allowClientTransfer: false,
+    });
+    if (!validation.ok) {
+      throw new Error(validation.error || 'Não foi possível atualizar o veículo.');
+    }
+
     try {
       const now = new Date().toISOString();
+      const { planId: _ignoredPlanId, planName: _ignoredPlanName, ...safeData } = data;
       const payload: Record<string, any> = {
-        ...data,
+        ...safeData,
         updatedAt: now,
       };
-      if (data.plate) payload.plate = data.plate.toUpperCase().trim();
+      if (data.plate !== undefined) {
+        payload.plate = validation.formattedPlate || data.plate.toUpperCase().trim();
+      }
       if (data.monthlyValue !== undefined) payload.monthlyValue = Number(data.monthlyValue);
       if (data.dueDay !== undefined) payload.dueDay = Number(data.dueDay);
 
@@ -1061,108 +1103,31 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // PLAN ACTIONS
-  const addPlan = async (data: Omit<Plan, 'id' | 'createdAt' | 'updatedAt'>) => {
-    const id = `plan_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-    const now = new Date().toISOString();
-    const newPlan: Plan = {
-      ...data,
-      id,
-      name: data.name.trim(),
-      totalMonthlyValue: Number(data.totalMonthlyValue),
-      createdAt: now,
-      updatedAt: now,
-      createdBy: user?.uid || '',
-    };
-    try {
-      await setDoc(doc(db, 'plans', id), cleanFirestoreData(newPlan));
-      await logAudit('CREATE', 'Plan', id, `Cadastrou o plano "${newPlan.name}" (R$ ${newPlan.totalMonthlyValue.toFixed(2)}/mês)`);
-      return id;
-    } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, `plans/${id}`);
-      throw error;
-    }
+  // PLAN ACTIONS (DESCONTINUADOS OPERACIONALMENTE — COLEÇÃO MANTIDA SOMENTE PARA CONSULTA HISTÓRICA)
+  const DISCONTINUED_PLANS_ERROR =
+    'O módulo de Planos foi descontinuado operacionalmente. As mensalidades são gerenciadas individualmente por veículo e os registros antigos de planos são mantidos somente para consulta histórica.';
+
+  const addPlan = async (_data: Omit<Plan, 'id' | 'createdAt' | 'updatedAt'>): Promise<string> => {
+    throw new Error(DISCONTINUED_PLANS_ERROR);
   };
 
-  const updatePlan = async (id: string, data: Partial<Plan>) => {
-    try {
-      const now = new Date().toISOString();
-      const payload: Record<string, any> = {
-        ...data,
-        updatedAt: now,
-      };
-      if (data.name) payload.name = data.name.trim();
-      if (data.totalMonthlyValue !== undefined) payload.totalMonthlyValue = Number(data.totalMonthlyValue);
-
-      await updateDoc(doc(db, 'plans', id), cleanFirestoreData(payload));
-      await logAudit('UPDATE', 'Plan', id, `Atualizou dados do plano "${data.name || id}"`);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `plans/${id}`);
-      throw error;
-    }
+  const updatePlan = async (_id: string, _data: Partial<Plan>): Promise<void> => {
+    throw new Error(DISCONTINUED_PLANS_ERROR);
   };
 
-  const deletePlan = async (id: string) => {
-    const plan = plans.find((p) => p.id === id);
-    const planName = plan?.name || id;
-
-    const linkedVehicles = vehicles.filter((v) => v.planId === id);
-    const linkedClients = clients.filter((c) => c.planId === id);
-
-    if (linkedVehicles.length > 0 || linkedClients.length > 0) {
-      throw new Error(
-        `Não é possível excluir o plano "${planName}". Existem ${linkedClients.length} cliente(s) e ${linkedVehicles.length} veículo(s) vinculados a este plano. Desvincule os contratos ou desative o plano.`
-      );
-    }
-
-    try {
-      await deleteDoc(doc(db, 'plans', id));
-      await logAudit('DELETE', 'Plan', id, `Excluiu o plano "${planName}"`);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `plans/${id}`);
-      throw error;
-    }
+  const deletePlan = async (_id: string): Promise<void> => {
+    throw new Error(DISCONTINUED_PLANS_ERROR);
   };
 
-  const togglePlanStatus = async (id: string) => {
-    const plan = plans.find((p) => p.id === id);
-    if (!plan) return;
-    const newStatus = plan.status === 'ativo' ? 'inativo' : 'ativo';
-    try {
-      const now = new Date().toISOString();
-      await updateDoc(doc(db, 'plans', id), cleanFirestoreData({
-        status: newStatus,
-        updatedAt: now,
-      }));
-      await logAudit('UPDATE', 'Plan', id, `Alterou status do plano "${plan.name}" para "${newStatus}"`);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `plans/${id}`);
-      throw error;
-    }
+  const togglePlanStatus = async (_id: string): Promise<void> => {
+    throw new Error(DISCONTINUED_PLANS_ERROR);
   };
 
-  const seedDefaultPlans = async () => {
-    const now = new Date().toISOString();
-    for (let idx = 0; idx < INITIAL_DEFAULT_PLANS.length; idx++) {
-      const p = INITIAL_DEFAULT_PLANS[idx];
-      const planId = `plan_default_${idx + 1}_${p.name.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
-      const docData: Plan = {
-        ...p,
-        id: planId,
-        createdAt: now,
-        updatedAt: now,
-        createdBy: user?.uid || 'sistema',
-      };
-      try {
-        await setDoc(doc(db, 'plans', planId), cleanFirestoreData(docData));
-      } catch (e) {
-        console.warn('Erro ao semear plano padrão:', e);
-      }
-    }
-    await logAudit('SEED', 'Plan', 'default_plans', 'Semeou os planos padrão da AUTOTEC no Firestore');
+  const seedDefaultPlans = async (): Promise<void> => {
+    throw new Error(DISCONTINUED_PLANS_ERROR);
   };
 
-  const assignPlanToClient = async (params: {
+  const assignPlanToClient = async (_params: {
     clientId: string;
     planId: string | null;
     vehicleAssignments: {
@@ -1171,53 +1136,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       planDescription?: string;
     }[];
     operatorNote?: string;
-  }) => {
-    const client = clients.find((c) => c.id === params.clientId);
-    if (!client) throw new Error('Cliente não encontrado');
-
-    const selectedPlan = params.planId ? plans.find((p) => p.id === params.planId) : null;
-    const oldPlanName = client.planName || 'Avulso';
-    const newPlanName = selectedPlan ? selectedPlan.name : (params.planId === null ? 'Avulso / Sem Plano' : 'Personalizado');
-
-    const now = new Date().toISOString();
-
-    // 1. Update client doc
-    await updateDoc(doc(db, 'clients', client.id), cleanFirestoreData({
-      planId: params.planId || null,
-      planName: newPlanName,
-      updatedAt: now,
-    }));
-
-    // 2. Update each vehicle doc individually
-    let updatedCount = 0;
-    const changesSummary: string[] = [];
-
-    for (const assign of params.vehicleAssignments) {
-      const veh = vehicles.find((v) => v.id === assign.vehicleId);
-      if (!veh) continue;
-      const oldVal = veh.monthlyValue;
-      const newVal = Number(assign.monthlyValue);
-
-      await updateDoc(doc(db, 'vehicles', veh.id), cleanFirestoreData({
-        planId: params.planId || null,
-        planName: newPlanName,
-        monthlyValue: newVal,
-        planDescription: assign.planDescription || newPlanName,
-        updatedAt: now,
-      }));
-      updatedCount++;
-      changesSummary.push(`${veh.plate} (${veh.model}): R$ ${oldVal.toFixed(2)} -> R$ ${newVal.toFixed(2)}`);
-    }
-
-    // 3. Log Audit as strictly required
-    await logAudit(
-      'PLAN_CHANGE',
-      'Client',
-      client.id,
-      `Alteração de plano do cliente "${client.name}". Plano anterior: "${oldPlanName}" -> Novo plano: "${newPlanName}". Alterações nos veículos: [${changesSummary.join('; ')}]. Observação: ${params.operatorNote || 'Nenhuma'}`
-    );
-
-    return { success: true, updatedVehicles: updatedCount };
+  }): Promise<{ success: boolean; updatedVehicles: number }> => {
+    throw new Error(DISCONTINUED_PLANS_ERROR);
   };
 
   // CHARGE ACTIONS
@@ -1291,7 +1211,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // Adiar mensalidade (adiamento temporário somente da cobrança selecionada, preservando dia habitual e histórico)
+  // Adiar mensalidade (transacional com validação estrita e payload livre de undefined, preservando dia habitual e histórico)
   const postponeCharge = async ({
     chargeId,
     newDueDate,
@@ -1301,78 +1221,29 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     newDueDate: string;
     reason?: string;
   }): Promise<ChargePostponementRecord> => {
-    const charge = charges.find((c) => c.id === chargeId);
-    if (!charge) {
-      throw new Error('Mensalidade não encontrada.');
-    }
-
-    const eligibility = getPostponeEligibility(charge);
-    if (!eligibility.allowed) {
-      throw new Error(eligibility.reason || 'Esta mensalidade não pode ser adiada.');
-    }
-
-    const currentDueDate = normalizeIsoDate(charge.dueDate);
-    const normalizedNewDate = normalizeIsoDate(newDueDate);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(normalizedNewDate)) {
-      throw new Error('Informe uma data válida para o adiamento (dia, mês e ano).');
-    }
-
-    if (normalizedNewDate === currentDueDate) {
-      throw new Error('A nova data de vencimento precisa ser diferente da data atual.');
-    }
-
-    const now = new Date().toISOString();
-    const originalDueDate = normalizeIsoDate(charge.originalDueDate) || currentDueDate;
-    const targetType: 'plano' | 'veiculo' = charge.isPlanCharge ? 'plano' : 'veiculo';
-    const targetLabel = charge.isPlanCharge
-      ? `${charge.planName || 'Plano'} (${charge.vehiclePlate})`
-      : `${charge.vehiclePlate} — ${charge.vehicleModel}`;
-
-    const postponementRecord: ChargePostponementRecord = {
-      id: `post_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-      originalDueDate,
-      previousDueDate: currentDueDate,
-      newDueDate: normalizedNewDate,
-      referenceMonth: charge.referenceMonth,
-      clientId: charge.clientId,
-      clientName: charge.clientName,
-      targetType,
-      targetLabel,
-      planId: charge.planId,
-      vehicleId: charge.vehicleId,
-      postponedAt: now,
-      operatorId: user?.uid || 'system',
-      operatorName: profile?.displayName || user?.displayName || user?.email || 'Operador',
-      reason: reason?.trim() || undefined,
-    };
-
-    const nextHistory = [...(charge.postponementHistory || []), postponementRecord];
-
     try {
-      await updateDoc(
-        doc(db, 'charges', charge.id),
-        cleanFirestoreData({
-          dueDate: normalizedNewDate,
-          originalDueDate,
-          isPostponed: true,
-          postponedAt: now,
-          postponementCount: nextHistory.length,
-          postponementHistory: nextHistory,
-          updatedAt: now,
-        })
-      );
+      const result = await executePostponeCharge(firestoreFinancialStoreAdapter, {
+        chargeId,
+        newDueDate,
+        reason,
+        operatorId: user?.uid || 'system',
+        operatorName: profile?.displayName || user?.displayName || user?.email || 'Operador',
+      });
 
+      const { record } = result;
       await logAudit(
         'POSTPONE',
         'Charge',
-        charge.id,
-        `Adiou mensalidade (${charge.referenceMonth}) de ${charge.clientName} [${targetLabel}] de ${formatDate(charge.dueDate)} para ${formatDate(normalizedNewDate)}${reason?.trim() ? ` — Motivo: ${reason.trim()}` : ''}`
+        chargeId,
+        `Adiou mensalidade (${record.referenceMonth}) de ${record.clientName} [${record.targetLabel}] de ${formatDate(record.previousDueDate)} para ${formatDate(record.newDueDate)}${record.reason ? ` — Motivo: ${record.reason}` : ''}`
       );
 
-      return postponementRecord;
+      return record;
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `charges/${charge.id}`);
-      throw error;
+      if (error instanceof FinancialValidationError) {
+        throw error;
+      }
+      handleFirestoreError(error, OperationType.UPDATE, `charges/${chargeId}`);
     }
   };
 
@@ -1397,11 +1268,19 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
 
       if (result.created > 0) {
+        const carriedNote =
+          result.carriedSourceIds.length > 0
+            ? `, ${result.carriedSourceIds.length} saldo(s) parcial(is) transportado(s)`
+            : '';
+        const legacyPlanNote =
+          result.untransferredPlanChargeIds.length > 0
+            ? `, ${result.untransferredPlanChargeIds.length} saldo(s) legado(s) de plano preservado(s)`
+            : '';
         await logAudit(
           'CREATE',
           'Charge',
           month,
-          `Geração em lote (${month}): ${result.created} cobrança(s) criada(s), ${result.skipped} ignorada(s)`
+          `Geração em lote (${month}): ${result.created} cobrança(s) criada(s), ${result.skipped} ignorada(s)${carriedNote}${legacyPlanNote}`
         );
       }
 
@@ -1468,6 +1347,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     charge,
     amount,
     paymentMethod,
+    paymentDate,
     notes,
     balanceHandling = 'none',
     balanceScheduledDate,
@@ -1476,6 +1356,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     charge: Charge;
     amount: number;
     paymentMethod: PaymentMethod;
+    paymentDate?: string;
     notes?: string;
     balanceHandling?: BalanceHandling;
     balanceScheduledDate?: string;
@@ -1486,6 +1367,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         chargeId: charge.id,
         amount,
         paymentMethod,
+        paymentDate,
         notes,
         balanceHandling,
         balanceScheduledDate,

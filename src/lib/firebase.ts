@@ -55,8 +55,24 @@ export interface FirestoreErrorInfo {
   };
 }
 
-export function cleanFirestoreData<T extends Record<string, any>>(obj: T): T {
-  if (obj === null || typeof obj !== 'object' || Array.isArray(obj) || obj instanceof Date) {
+function isPlainFirestoreObject(value: unknown): value is Record<string, any> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value) || value instanceof Date) {
+    return false;
+  }
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+export function cleanFirestoreData<T>(obj: T): T {
+  if (obj === null || obj === undefined || typeof obj !== 'object' || obj instanceof Date) {
+    return obj;
+  }
+  if (Array.isArray(obj)) {
+    return obj
+      .filter((item) => item !== undefined)
+      .map((item) => cleanFirestoreData(item)) as unknown as T;
+  }
+  if (!isPlainFirestoreObject(obj)) {
     return obj;
   }
   const cleaned: Record<string, any> = {};
@@ -64,7 +80,7 @@ export function cleanFirestoreData<T extends Record<string, any>>(obj: T): T {
     if (val === undefined) {
       continue;
     }
-    if (val !== null && typeof val === 'object' && !Array.isArray(val) && !(val instanceof Date)) {
+    if (Array.isArray(val) || isPlainFirestoreObject(val)) {
       cleaned[key] = cleanFirestoreData(val);
     } else {
       cleaned[key] = val;

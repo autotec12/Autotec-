@@ -84,6 +84,12 @@ export interface ChargePostponementRecord {
   reason?: string;
 }
 
+export interface CarriedBalanceSourceItem {
+  sourceChargeId: string;
+  sourceReferenceMonth: string;
+  amount: number;
+}
+
 export interface Charge {
   id: string;
   clientId: string;
@@ -108,12 +114,21 @@ export interface Charge {
   status: ChargeStatus;
   balanceHandling?: BalanceHandling;
   balanceScheduledDate?: string;
+  // Rastreabilidade de transporte de saldo parcial (Etapa A2)
+  carriedFromChargeIds?: string[]; // IDs das cobranças de origem incorporadas nesta cobrança
+  carriedBalanceSources?: CarriedBalanceSourceItem[]; // Detalhamento de cada origem incorporada
+  carriedBalanceConsumed?: boolean; // Marca se o saldo parcial desta cobrança já foi transportado
+  carriedToChargeId?: string; // ID da cobrança de destino que incorporou o saldo
+  carriedToReferenceMonth?: string; // Competência (YYYY-MM) da cobrança de destino
+  carriedBalanceAmount?: number; // Valor efetivamente transportado para a cobrança de destino
+  carriedBalanceAt?: string; // Timestamp ISO da conclusão atômica do transporte
   notes?: string;
   isPlanCharge?: boolean;
   planId?: string;
   planName?: string;
   vehicleIds?: string[];
   vehiclePlates?: string[];
+  paymentDate?: string; // Data real do último recebimento registrado (YYYY-MM-DD ou ISO)
   createdAt: string;
   updatedAt: string;
   createdBy?: string;
@@ -125,6 +140,7 @@ export interface ConsolidatedPaymentItem {
   vehiclePlate: string;
   vehicleModel: string;
   referenceMonth: string;
+  dueDate?: string; // Vencimento original preservado da mensalidade (YYYY-MM-DD)
   originalAmount: number;
   previousPaidAmount: number;
   paidInThisOperation: number;

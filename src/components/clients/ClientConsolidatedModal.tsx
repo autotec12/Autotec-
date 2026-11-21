@@ -1,40 +1,96 @@
-import React, { useState } from 'react';
-import { Client } from '../../types';
+import React, { useMemo, useState } from 'react';
+import { Client, Vehicle } from '../../types';
 import { useData } from '../../context/DataContext';
-import { consolidateClientFinancials, formatCurrency, formatDate } from '../../lib/calculations';
+import {
+  consolidateClientFinancials,
+  formatCurrency,
+  formatDate,
+  getChargeRemainingBalance,
+  getTodayIsoDate,
+  normalizeIsoDate,
+} from '../../lib/calculations';
+import {
+  calculateActiveVehiclesMonthlySum,
+  classifyRecordLinkStatus,
+  HISTORICAL_MISSING_VEHICLE_LABEL,
+} from '../../lib/clientVehicleLookup';
+import { VehicleModal } from '../vehicles/VehicleModal';
 import {
   X,
   Car,
   Bike,
   Truck,
   ShieldAlert,
-  CheckCircle2,
-  Clock,
   Phone,
   MessageSquare,
-  Package,
   PlusCircle,
   Radio,
+  Edit2,
+  AlertTriangle,
+  History,
+  Receipt,
 } from 'lucide-react';
 import { openWhatsAppLink } from '../../lib/whatsapp';
-import { AssignPlanModal } from '../plans/AssignPlanModal';
 
 interface ClientConsolidatedModalProps {
   client: Client;
   onClose: () => void;
-  onAddVehicle: () => void;
+  onAddVehicle?: () => void;
   onRecordPaymentForCharge?: (chargeId: string) => void;
 }
 
 export const ClientConsolidatedModal: React.FC<ClientConsolidatedModalProps> = ({
   client,
   onClose,
-  onAddVehicle,
 }) => {
-  const { vehicles, charges, companySettings } = useData();
-  const [assignPlanModalOpen, setAssignPlanModalOpen] = useState(false);
+  const { clients, vehicles, charges, payments, companySettings } = useData();
+  const [vehicleModalState, setVehicleModalState] = useState<{
+    open: boolean;
+    editingVehicle: Vehicle | null;
+  }>({ open: false, editingVehicle: null });
 
-  const consolidated = consolidateClientFinancials(client, vehicles, charges);
+  // Use live client snapshot from DataContext if updated while modal is open
+  const liveClient = useMemo(
+    () => clients.find((c) => c.id === client.id) || client,
+    [clients, client]
+  );
+
+  const consolidated = useMemo(
+    () => consolidateClientFinancials(liveClient, vehicles, charges),
+    [liveClient, vehicles, charges]
+  );
+
+  const activeVehiclesCount = useMemo(
+    () => consolidated.vehicles.filter((v) => v.status === 'ativo').length,
+    [consolidated.vehicles]
+  );
+
+  const activeMonthlySum = useMemo(
+    () => calculateActiveVehiclesMonthlySum(vehicles, liveClient.id),
+    [vehicles, liveClient.id]
+  );
+
+  const clientsMap = useMemo(() => {
+    const map = new Map<string, Client>();
+    clients.forEach((c) => map.set(c.id, c));
+    return map;
+  }, [clients]);
+
+  const vehiclesMap = useMemo(() => {
+    const map = new Map<string, Vehicle>();
+    vehicles.forEach((v) => map.set(v.id, v));
+    return map;
+  }, [vehicles]);
+
+  const clientPayments = useMemo(
+    () =>
+      payments
+        .filter((p) => p.clientId === liveClient.id)
+        .sort((a, b) => (b.paymentDate || b.createdAt).localeCompare(a.paymentDate || a.createdAt)),
+    [payments, liveClient.id]
+  );
+
+  const todayIso = getTodayIsoDate();
 
   const getVehicleIcon = (type: string) => {
     switch (type) {
@@ -50,8 +106,8 @@ export const ClientConsolidatedModal: React.FC<ClientConsolidatedModalProps> = (
   };
 
   const handleGeneralWhatsApp = () => {
-    const text = `Olá, *${client.name}*! Entramos em contato da *${companySettings.companyName}* a respeito de seus contratos de rastreamento veicular.`;
-    openWhatsAppLink(client.whatsapp || client.phone, text);
+    const text = `Olá, *${liveClient.name}*! Entramos em contato da *${companySettings.companyName}* a respeito de seus contratos de rastreamento veicular.`;
+    openWhatsAppLink(liveClient.whatsapp || liveClient.phone, text);
   };
 
   return (
@@ -61,19 +117,19 @@ export const ClientConsolidatedModal: React.FC<ClientConsolidatedModalProps> = (
         <div className="px-6 py-4 bg-[#30334F] text-white flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-white/10 border border-white/20 flex items-center justify-center text-[#F28C1B] font-black text-lg">
-              {client.name.charAt(0).toUpperCase()}
+              {liveClient.name.charAt(0).toUpperCase()}
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <h3 className="font-bold text-white text-lg">{client.name}</h3>
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="font-bold text-white text-lg">{liveClient.name}</h3>
                 <span
                   className={`text-2xs uppercase px-2 py-0.5 rounded-full font-bold border ${
-                    client.status === 'ativo'
+                    liveClient.status === 'ativo'
                       ? 'bg-emerald-500/20 text-emerald-300 border-emerald-400/40'
                       : 'bg-rose-500/20 text-rose-300 border-rose-400/40'
                   }`}
                 >
-                  {client.status}
+                  {liveClient.status}
                 </span>
                 {consolidated.isOverdue && (
                   <span className="text-2xs uppercase px-2 py-0.5 rounded-full font-bold bg-rose-500/30 text-rose-300 border border-rose-400/50 flex items-center gap-1">
@@ -83,11 +139,12 @@ export const ClientConsolidatedModal: React.FC<ClientConsolidatedModalProps> = (
                 )}
               </div>
               <p className="text-xs text-slate-300">
-                CPF/CNPJ: {client.document || 'Não informado'} • Cadastrado em: {formatDate(client.createdAt)}
+                CPF/CNPJ: {liveClient.document || 'Não informado'} • Cadastrado em: {formatDate(liveClient.createdAt)}
               </p>
             </div>
           </div>
           <button
+            type="button"
             onClick={onClose}
             className="p-1.5 text-slate-300 hover:text-white rounded-lg hover:bg-white/10 transition cursor-pointer"
           >
@@ -102,21 +159,25 @@ export const ClientConsolidatedModal: React.FC<ClientConsolidatedModalProps> = (
             <div className="flex flex-wrap items-center gap-4 text-[#1E2235]">
               <span className="flex items-center gap-1.5 font-medium">
                 <Phone className="w-3.5 h-3.5 text-[#30334F]" />
-                {client.phone || client.whatsapp || 'Sem telefone'}
+                {liveClient.whatsapp || liveClient.phone || 'Sem telefone'}
+                {liveClient.phone && liveClient.whatsapp && liveClient.phone !== liveClient.whatsapp && (
+                  <span className="text-[#5F647E]">({liveClient.phone})</span>
+                )}
               </span>
-              {client.email && (
+              {liveClient.email && (
                 <span className="text-[#5F647E]">
-                  E-mail: <strong className="text-[#1E2235]">{client.email}</strong>
+                  E-mail: <strong className="text-[#1E2235]">{liveClient.email}</strong>
                 </span>
               )}
-              {client.address && (
+              {liveClient.address && (
                 <span className="text-[#5F647E]">
-                  Endereço: <strong className="text-[#1E2235]">{client.address}</strong>
+                  Endereço: <strong className="text-[#1E2235]">{liveClient.address}</strong>
                 </span>
               )}
             </div>
 
             <button
+              type="button"
               onClick={handleGeneralWhatsApp}
               className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-lg flex items-center gap-1.5 transition text-xs font-bold cursor-pointer"
             >
@@ -125,6 +186,23 @@ export const ClientConsolidatedModal: React.FC<ClientConsolidatedModalProps> = (
             </button>
           </div>
 
+          {liveClient.notes && (
+            <div className="px-3.5 py-2.5 bg-white border border-[#E2E4E0] rounded-xl text-xs text-[#5F647E]">
+              <strong className="text-[#30334F]">Observações:</strong> {liveClient.notes}
+            </div>
+          )}
+
+          {/* Historical Legacy Plan Notice (Read-only, ONLY if historical planName exists) */}
+          {liveClient.planName && (
+            <div className="px-3.5 py-2.5 bg-slate-100 border border-slate-200 rounded-xl text-2xs text-slate-600 flex items-center gap-2">
+              <History className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+              <span>
+                Referência histórica de plano antigo descontinuado:{' '}
+                <strong className="text-slate-700">{liveClient.planName}</strong> (somente consulta histórica — cobranças atuais são individuais por veículo ativo).
+              </span>
+            </div>
+          )}
+
           {/* FINANCIAL CONSOLIDATED CARDS */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div className="p-3.5 bg-white border border-[#E2E4E0] rounded-xl shadow-xs">
@@ -132,10 +210,10 @@ export const ClientConsolidatedModal: React.FC<ClientConsolidatedModalProps> = (
                 Faturamento Mensal
               </span>
               <span className="text-lg font-black text-[#1E2235] tracking-tight">
-                {formatCurrency(consolidated.totalMonthlyValue)}
+                {formatCurrency(activeMonthlySum)}
               </span>
               <span className="text-2xs text-[#5F647E] block mt-0.5">
-                Soma de todos os planos ativos
+                {activeVehiclesCount} {activeVehiclesCount === 1 ? 'veículo ativo' : 'veículos ativos'} (de {consolidated.vehiclesCount})
               </span>
             </div>
 
@@ -176,58 +254,20 @@ export const ClientConsolidatedModal: React.FC<ClientConsolidatedModalProps> = (
             </div>
           </div>
 
-          {/* PLAN / PACOTE CONTRATADO SECTION */}
-          <div className="p-4 bg-white border border-[#E2E4E0] rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 rounded-xl bg-[#FFF5EB] text-[#F28C1B] border border-[#FCD9B3]">
-                <Package className="w-5 h-5" />
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="text-3xs uppercase tracking-wider font-extrabold text-[#F28C1B]">
-                    Plano / Pacote Comercial
-                  </span>
-                  {client.planName ? (
-                    <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-3xs font-bold">
-                      Contratado
-                    </span>
-                  ) : (
-                    <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 text-3xs font-bold">
-                      Tarifa Avulsa
-                    </span>
-                  )}
-                </div>
-                <h4 className="text-sm font-bold text-[#1E2235]">
-                  {client.planName || 'Mensalidades Individuais Avulsas'}
-                </h4>
-                <p className="text-2xs text-[#5F647E]">
-                  Total contratado: <strong className="text-[#30334F] font-mono">{formatCurrency(consolidated.totalMonthlyValue)}/mês</strong> distribuído entre os veículos
-                </p>
-              </div>
-            </div>
-
-            <button
-              onClick={() => setAssignPlanModalOpen(true)}
-              className="px-3.5 py-2 bg-[#30334F] hover:bg-[#222538] text-white rounded-xl text-xs font-bold flex items-center gap-2 transition shrink-0 shadow-xs cursor-pointer"
-            >
-              <Package className="w-3.5 h-3.5 text-[#F28C1B]" />
-              {client.planName ? 'Alterar Plano / Valores' : 'Vincular Plano / Pacote'}
-            </button>
-          </div>
-
           {/* VEHICLES / CONTRACTS LIST */}
           <div>
-            <div className="flex items-center justify-between mb-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
               <div>
                 <h4 className="font-bold text-[#30334F] text-sm">
-                  Veículos e Contratos Vinculados ({consolidated.vehiclesCount})
+                  Veículos Vinculados ({consolidated.vehiclesCount})
                 </h4>
                 <p className="text-xs text-[#5F647E]">
-                  Cada veículo possui seu plano contínuo e dia de vencimento próprio
+                  Cada veículo possui valor mensal e dia de vencimento individuais
                 </p>
               </div>
               <button
-                onClick={onAddVehicle}
+                type="button"
+                onClick={() => setVehicleModalState({ open: true, editingVehicle: null })}
                 className="px-3 py-1.5 bg-[#F28C1B] hover:bg-[#DE7B0E] text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition shadow-xs cursor-pointer"
               >
                 <PlusCircle className="w-3.5 h-3.5" />
@@ -246,8 +286,8 @@ export const ClientConsolidatedModal: React.FC<ClientConsolidatedModalProps> = (
                     key={v.id}
                     className="p-4 bg-white border border-[#E2E4E0] rounded-xl flex items-start justify-between gap-3 hover:border-[#30334F]/40 shadow-xs transition"
                   >
-                    <div className="space-y-1.5">
-                      <div className="flex items-center gap-2">
+                    <div className="space-y-1.5 min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
                         <span className="p-1.5 bg-[#F8F9FA] rounded-md border border-[#E2E4E0]">
                           {getVehicleIcon(v.vehicleType)}
                         </span>
@@ -255,7 +295,7 @@ export const ClientConsolidatedModal: React.FC<ClientConsolidatedModalProps> = (
                           {v.plate}
                         </span>
                         <span
-                          className={`text-2xs px-1.5 py-0.5 rounded-full font-bold ${
+                          className={`text-2xs px-1.5 py-0.5 rounded-full font-bold capitalize ${
                             v.status === 'ativo'
                               ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                               : v.status === 'suspenso'
@@ -270,7 +310,7 @@ export const ClientConsolidatedModal: React.FC<ClientConsolidatedModalProps> = (
                         {v.brand} {v.model} {v.color ? `• ${v.color}` : ''}
                       </div>
                       <div className="text-2xs text-[#5F647E]">
-                        Plano: <span className="text-[#1E2235] font-semibold">{v.planDescription || 'Rastreamento Padrão'}</span>
+                        Serviço: <span className="text-[#1E2235] font-semibold">{v.planDescription || 'Rastreamento Veicular Mensal'}</span>
                       </div>
                       {(v.trackerModel || v.trackerSerial) && (
                         <div className="text-3xs text-slate-700 flex items-center gap-1 font-medium bg-[#F8F9FA] px-1.5 py-0.5 rounded border border-[#E2E4E0] w-fit">
@@ -286,12 +326,23 @@ export const ClientConsolidatedModal: React.FC<ClientConsolidatedModalProps> = (
                       </div>
                     </div>
 
-                    <div className="text-right">
-                      <span className="text-2xs text-[#5F647E] block font-medium">Mensalidade</span>
-                      <span className="text-base font-black text-[#30334F]">
-                        {formatCurrency(v.monthlyValue)}
-                        <span className="text-2xs font-normal text-[#5F647E]">/mês</span>
-                      </span>
+                    <div className="text-right flex flex-col items-end justify-between gap-2 shrink-0">
+                      <div>
+                        <span className="text-2xs text-[#5F647E] block font-medium">Mensalidade</span>
+                        <span className="text-base font-black text-[#30334F]">
+                          {formatCurrency(v.monthlyValue)}
+                          <span className="text-2xs font-normal text-[#5F647E]">/mês</span>
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setVehicleModalState({ open: true, editingVehicle: v })}
+                        className="px-2.5 py-1 bg-[#F3F4F2] hover:bg-[#30334F] hover:text-white text-[#30334F] border border-[#DCE0D9] rounded-lg text-2xs font-bold flex items-center gap-1 transition cursor-pointer"
+                        title="Visualizar ou editar dados deste veículo"
+                      >
+                        <Edit2 className="w-3 h-3" />
+                        Editar
+                      </button>
                     </div>
                   </div>
                 ))}
@@ -299,7 +350,7 @@ export const ClientConsolidatedModal: React.FC<ClientConsolidatedModalProps> = (
             )}
           </div>
 
-          {/* FINANCIAL HISTORY */}
+          {/* FINANCIAL HISTORY — CHARGES */}
           <div>
             <h4 className="font-bold text-[#30334F] text-sm mb-2">
               Histórico das Mensalidades do Cliente ({consolidated.charges.length})
@@ -309,7 +360,7 @@ export const ClientConsolidatedModal: React.FC<ClientConsolidatedModalProps> = (
                 Nenhuma fatura/mensalidade gerada ainda para este cliente.
               </div>
             ) : (
-              <div className="border border-[#E2E4E0] rounded-xl overflow-hidden bg-white shadow-xs">
+              <div className="border border-[#E2E4E0] rounded-xl overflow-x-auto bg-white shadow-xs">
                 <table className="w-full text-xs text-left">
                   <thead className="bg-[#F8F9FA] text-[#5F647E] font-bold border-b border-[#E2E4E0]">
                     <tr>
@@ -324,12 +375,34 @@ export const ClientConsolidatedModal: React.FC<ClientConsolidatedModalProps> = (
                   </thead>
                   <tbody className="divide-y divide-[#EDF0EC]">
                     {consolidated.charges.map((c) => {
-                      const isOver = c.remainingBalance > 0 && c.dueDate < new Date().toISOString().split('T')[0];
+                      const remaining = getChargeRemainingBalance(c);
+                      const normalizedDue = normalizeIsoDate(c.dueDate);
+                      const isOver =
+                        c.status !== 'pago' &&
+                        c.status !== 'cancelado' &&
+                        remaining > 0.009 &&
+                        Boolean(normalizedDue) &&
+                        normalizedDue < todayIso;
+                      const linkInfo = classifyRecordLinkStatus({
+                        clientId: c.clientId,
+                        vehicleId: c.vehicleId,
+                        isPlanCharge: c.isPlanCharge,
+                        vehicleIds: c.vehicleIds,
+                        clientsMap,
+                        vehiclesMap,
+                      });
+
                       return (
                         <tr key={c.id} className="hover:bg-[#F9FAF8] transition">
                           <td className="px-3.5 py-2.5 font-bold text-[#1E2235]">
                             <div>{c.referenceMonth}</div>
-                            <div className="text-2xs text-[#5F647E]">{c.vehiclePlate}</div>
+                            <div className="text-2xs text-[#5F647E] font-mono">{c.vehiclePlate}</div>
+                            {linkInfo.isOrphan && !linkInfo.vehicleExists && (
+                              <span className="mt-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-50 text-amber-900 border border-amber-300 text-3xs font-extrabold">
+                                <AlertTriangle className="w-2.5 h-2.5 shrink-0 text-amber-600" />
+                                {HISTORICAL_MISSING_VEHICLE_LABEL}
+                              </span>
+                            )}
                           </td>
                           <td className="px-3.5 py-2.5 text-[#1E2235]">
                             <span className={isOver ? 'text-rose-600 font-bold' : 'font-medium'}>
@@ -351,9 +424,9 @@ export const ClientConsolidatedModal: React.FC<ClientConsolidatedModalProps> = (
                             {formatCurrency(c.paidAmount)}
                           </td>
                           <td className="px-3.5 py-2.5 font-black">
-                            {c.remainingBalance > 0 ? (
+                            {remaining > 0.009 ? (
                               <span className={isOver ? 'text-rose-600' : 'text-[#C86905]'}>
-                                {formatCurrency(c.remainingBalance)}
+                                {formatCurrency(remaining)}
                               </span>
                             ) : (
                               <span className="text-slate-400">R$ 0,00</span>
@@ -388,29 +461,86 @@ export const ClientConsolidatedModal: React.FC<ClientConsolidatedModalProps> = (
               </div>
             )}
           </div>
+
+          {/* PAYMENTS HISTORY */}
+          <div>
+            <h4 className="font-bold text-[#30334F] text-sm mb-2 flex items-center gap-1.5">
+              <Receipt className="w-4 h-4 text-[#F28C1B]" />
+              Pagamentos e Recibos Registrados ({clientPayments.length})
+            </h4>
+            {clientPayments.length === 0 ? (
+              <div className="p-4 bg-white border border-[#E2E4E0] rounded-xl text-center text-xs text-[#5F647E] shadow-xs">
+                Nenhum pagamento registrado ainda para este cliente.
+              </div>
+            ) : (
+              <div className="border border-[#E2E4E0] rounded-xl overflow-x-auto bg-white shadow-xs">
+                <table className="w-full text-xs text-left">
+                  <thead className="bg-[#F8F9FA] text-[#5F647E] font-bold border-b border-[#E2E4E0]">
+                    <tr>
+                      <th className="px-3.5 py-2.5">Data</th>
+                      <th className="px-3.5 py-2.5">Recibo</th>
+                      <th className="px-3.5 py-2.5">Placa / Origem</th>
+                      <th className="px-3.5 py-2.5">Forma</th>
+                      <th className="px-3.5 py-2.5 text-right">Valor Recebido</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#EDF0EC]">
+                    {clientPayments.map((p) => (
+                      <tr key={p.id} className="hover:bg-[#F9FAF8] transition">
+                        <td className="px-3.5 py-2.5 font-medium text-[#1E2235]">
+                          {formatDate(p.paymentDate)}
+                        </td>
+                        <td className="px-3.5 py-2.5 font-mono font-bold text-[#30334F]">
+                          {p.receiptNumber}
+                          {p.isConsolidated && (
+                            <span className="ml-1.5 px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200 text-3xs font-sans font-bold">
+                              Consolidado
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-3.5 py-2.5 font-mono text-[#5F647E]">
+                          {p.vehiclePlate || '-'}
+                        </td>
+                        <td className="px-3.5 py-2.5 uppercase text-2xs font-bold text-slate-600">
+                          {p.paymentMethod}
+                        </td>
+                        <td className="px-3.5 py-2.5 text-right font-black text-emerald-700">
+                          {formatCurrency(p.amount)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Footer */}
         <div className="px-6 py-3 bg-[#F8F9FA] border-t border-[#E2E4E0] flex items-center justify-between text-xs">
           <span className="text-[#5F647E]">
-            Controle consolidado de contratos para identificação e gestão financeira.
+            Ficha consolidada do cliente, frota vinculada e histórico financeiro completo.
           </span>
           <button
+            type="button"
             onClick={onClose}
             className="px-4 py-2 text-[#30334F] hover:bg-slate-200 bg-slate-100 rounded-xl transition font-bold cursor-pointer"
           >
-            Fechar Visão Consolidada
+            Fechar Ficha do Cliente
           </button>
         </div>
       </div>
 
-      {assignPlanModalOpen && (
-        <AssignPlanModal
-          client={client}
-          onClose={() => setAssignPlanModalOpen(false)}
-          onSuccess={() => setAssignPlanModalOpen(false)}
+      {/* Inline Vehicle Create / Edit Modal keeping Dossier Context */}
+      {vehicleModalState.open && (
+        <VehicleModal
+          vehicle={vehicleModalState.editingVehicle}
+          preselectedClientId={vehicleModalState.editingVehicle ? undefined : liveClient.id}
+          onClose={() => setVehicleModalState({ open: false, editingVehicle: null })}
+          onSuccess={() => setVehicleModalState({ open: false, editingVehicle: null })}
         />
       )}
     </div>
   );
 };
+

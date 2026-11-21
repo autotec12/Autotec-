@@ -4,6 +4,7 @@ import {
   calculateDashboardMetrics,
   formatCurrency,
   formatDate,
+  getChargeRemainingBalance,
   getCurrentMonthStr,
 } from '../../lib/calculations';
 import { Payment, Charge } from '../../types';
@@ -274,16 +275,26 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
                   <div className="text-xs font-bold text-[#1E2235]">{c.clientName}</div>
                   <div className="text-2xs text-[#5F647E]">Placa: {c.vehiclePlate}</div>
                 </div>
-                <div className="text-right">
+                <div className="text-right flex flex-col items-end gap-1">
                   <div className="text-xs font-black text-[#C86905]">
-                    {formatCurrency(c.remainingBalance)}
+                    {formatCurrency(getChargeRemainingBalance(c))}
                   </div>
-                  <button
-                    onClick={() => setChargeForWhatsApp(c)}
-                    className="text-2xs text-emerald-700 hover:text-emerald-800 flex items-center gap-1 mt-1 font-bold cursor-pointer"
-                  >
-                    <MessageSquare className="w-3 h-3" /> Cobrar
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => setChargeForPayment(c)}
+                      title="Registrar Recebimento"
+                      className="px-2.5 py-1 rounded-lg bg-[#059669] hover:bg-[#047857] text-white text-2xs font-bold transition shadow-2xs cursor-pointer"
+                    >
+                      Baixar
+                    </button>
+                    <button
+                      onClick={() => setChargeForWhatsApp(c)}
+                      title="Cobrar via WhatsApp"
+                      className="p-1 rounded-lg bg-emerald-100 text-emerald-800 hover:bg-emerald-200 text-2xs transition cursor-pointer"
+                    >
+                      <MessageSquare className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
               </div>
             ))}
@@ -300,16 +311,26 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
                   <div className="text-xs font-bold text-[#1E2235]">{c.clientName}</div>
                   <div className="text-2xs text-[#5F647E]">Placa: {c.vehiclePlate}</div>
                 </div>
-                <div className="text-right">
+                <div className="text-right flex flex-col items-end gap-1">
                   <div className="text-xs font-bold text-[#1E2235]">
-                    {formatCurrency(c.remainingBalance)}
+                    {formatCurrency(getChargeRemainingBalance(c))}
                   </div>
-                  <button
-                    onClick={() => setChargeForWhatsApp(c)}
-                    className="text-2xs text-emerald-700 hover:text-emerald-800 flex items-center gap-1 mt-1 font-bold cursor-pointer"
-                  >
-                    <MessageSquare className="w-3 h-3" /> Lembrar
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => setChargeForPayment(c)}
+                      title="Registrar Recebimento Antecipado"
+                      className="px-2.5 py-1 rounded-lg bg-[#059669] hover:bg-[#047857] text-white text-2xs font-bold transition shadow-2xs cursor-pointer"
+                    >
+                      Baixar
+                    </button>
+                    <button
+                      onClick={() => setChargeForWhatsApp(c)}
+                      title="Lembrar via WhatsApp"
+                      className="p-1 rounded-lg bg-emerald-100 text-emerald-800 hover:bg-emerald-200 text-2xs transition cursor-pointer"
+                    >
+                      <MessageSquare className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
               </div>
             ))}
@@ -349,7 +370,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
                 </div>
                 <div className="text-right flex flex-col items-end gap-1">
                   <div className="text-xs font-black text-rose-700">
-                    {formatCurrency(c.remainingBalance)}
+                    {formatCurrency(getChargeRemainingBalance(c))}
                   </div>
                   <div className="flex gap-2">
                     <button

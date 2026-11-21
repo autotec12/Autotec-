@@ -1,7 +1,14 @@
 import React, { useState, useMemo } from 'react';
 import { useData } from '../../context/DataContext';
 import { GeneralTransaction, GeneralFinancialSummary } from '../../types';
-import { formatCurrency, formatDate, getEffectiveCharges } from '../../lib/calculations';
+import {
+  formatCurrency,
+  formatDate,
+  getChargeRemainingBalance,
+  getEffectiveCharges,
+  getPaymentEffectiveDate,
+  getTodayIsoDate,
+} from '../../lib/calculations';
 import {
   TrendingUp,
   TrendingDown,
@@ -51,7 +58,7 @@ export const GeneralManagementView: React.FC<GeneralManagementViewProps> = ({ on
   // Helper date range calculator
   const dateRange = useMemo(() => {
     const now = new Date();
-    const todayStr = now.toISOString().slice(0, 10);
+    const todayStr = getTodayIsoDate();
 
     if (period === 'hoje') {
       return { start: todayStr, end: todayStr };
@@ -110,9 +117,9 @@ export const GeneralManagementView: React.FC<GeneralManagementViewProps> = ({ on
   const allTransactions: GeneralTransaction[] = useMemo(() => {
     const list: GeneralTransaction[] = [];
 
-    // 1. Mensalidades: Pagamentos realizados
+    // 1. Mensalidades: Pagamentos realizados (contabilizados estritamente na data real do pagamento)
     payments.forEach((p) => {
-      const date = (p.paymentDate || p.createdAt || '').slice(0, 10);
+      const date = getPaymentEffectiveDate(p) || (p.paymentDate || p.createdAt || '').slice(0, 10);
       list.push({
         id: p.id,
         date,
@@ -129,8 +136,12 @@ export const GeneralManagementView: React.FC<GeneralManagementViewProps> = ({ on
       });
     });
 
-    // 1.1 Mensalidades: Cobranças pendentes ou com saldo restante
-    charges.forEach((c) => {
+    // 1.1 Mensalidades: Cobranças pendentes ou com saldo restante (nunca antecipam receita não recebida)
+    getEffectiveCharges(charges).forEach((c) => {
+      if (c.status === 'cancelado' || c.status === 'pago') return;
+      const remaining = getChargeRemainingBalance(c);
+      if (remaining <= 0.009) return;
+
       if (c.status === 'pendente') {
         const date = (c.dueDate || c.createdAt || '').slice(0, 10);
         list.push({
@@ -142,12 +153,12 @@ export const GeneralManagementView: React.FC<GeneralManagementViewProps> = ({ on
           description: `Mensalidade (Pendente): ${c.clientName} - Placa ${c.vehiclePlate || 'N/I'}`,
           partyName: c.clientName,
           paymentMethod: undefined,
-          amount: Number(c.remainingBalance || c.totalAmount) || 0,
+          amount: remaining,
           status: 'pendente',
           rawRecordId: c.id,
           clientId: c.clientId,
         });
-      } else if (c.status === 'parcial' && c.remainingBalance > 0.009) {
+      } else if (c.status === 'parcial') {
         const date = (c.balanceScheduledDate || c.dueDate || c.createdAt || '').slice(0, 10);
         list.push({
           id: `chg_parc_${c.id}`,
@@ -158,7 +169,7 @@ export const GeneralManagementView: React.FC<GeneralManagementViewProps> = ({ on
           description: `Mensalidade (Saldo Pendente): ${c.clientName} - Placa ${c.vehiclePlate || 'N/I'}`,
           partyName: c.clientName,
           paymentMethod: undefined,
-          amount: Number(c.remainingBalance) || 0,
+          amount: remaining,
           status: 'parcial',
           rawRecordId: c.id,
           clientId: c.clientId,
@@ -273,7 +284,7 @@ export const GeneralManagementView: React.FC<GeneralManagementViewProps> = ({ on
     const effectiveCharges = getEffectiveCharges(charges);
     const monthlyPending = effectiveCharges
       .filter((c) => c.status === 'pendente' || c.status === 'parcial')
-      .reduce((acc, c) => acc + (c.remainingBalance || 0), 0);
+      .reduce((acc, c) => acc + getChargeRemainingBalance(c), 0);
 
     const servicesPending = technicalServices
       .filter((s) => s.status === 'pendente' || s.status === 'parcial')
@@ -336,9 +347,11 @@ export const GeneralManagementView: React.FC<GeneralManagementViewProps> = ({ on
       };
     }
 
+    // Apenas movimentações efetivamente realizadas (status === 'pago') entram no gráfico de caixa;
+    // saldos residuais pendentes (chg_parc_ / pendente) nunca são contabilizados como receita recebida.
     allTransactions.forEach((tx) => {
       const ym = tx.date.slice(0, 7);
-      if (months[ym] && (tx.status === 'pago' || tx.status === 'parcial')) {
+      if (months[ym] && tx.status === 'pago') {
         if (tx.type === 'receita') {
           months[ym].revenue += tx.amount;
         } else {

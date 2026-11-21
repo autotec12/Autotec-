@@ -1,7 +1,16 @@
 import React, { useState, useMemo } from 'react';
 import { Client, Vehicle, Charge, TechnicalServiceOrder, Payment } from '../../types';
 import { useData } from '../../context/DataContext';
-import { formatCurrency, formatDate } from '../../lib/calculations';
+import {
+  formatCurrency,
+  formatDate,
+  getChargeRemainingBalance,
+  getPaymentAmountForCharge,
+  getPaymentsForCharge,
+  getTodayIsoDate,
+  normalizeIsoDate,
+} from '../../lib/calculations';
+import { searchClientsWithVehicles } from '../../lib/clientVehicleLookup';
 import { generateClientDossierPdf } from '../../lib/pdfDocuments';
 import { downloadPdfFile } from '../../lib/exportHelpers';
 import {
@@ -36,17 +45,11 @@ export const ClientDossierSection: React.FC = () => {
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [activeTab, setActiveTab] = useState<'extrato' | 'mensalidades' | 'servicos'>('extrato');
 
-  // Filter clients for search
+  // Filter clients for search (name, document, phone, OR linked vehicle plate)
   const searchedClients = useMemo(() => {
     if (!searchTerm.trim()) return clients;
-    const term = searchTerm.toLowerCase().trim();
-    return clients.filter((c) => {
-      const matchName = c.name.toLowerCase().includes(term);
-      const matchPhone = (c.whatsapp || c.phone || '').toLowerCase().includes(term);
-      const matchDoc = (c.document || '').toLowerCase().includes(term);
-      return matchName || matchPhone || matchDoc;
-    });
-  }, [clients, searchTerm]);
+    return searchClientsWithVehicles(clients, vehicles, searchTerm).map((m) => m.client);
+  }, [clients, vehicles, searchTerm]);
 
   // Selected client
   const activeClient = useMemo(() => {
@@ -84,7 +87,7 @@ export const ClientDossierSection: React.FC = () => {
   // Resumo Financeiro Separado (Zero Contamination)
   const totalChargesBilled = clientCharges.reduce((acc, c) => acc + (c.totalAmount || 0), 0);
   const totalChargesPaid = clientCharges.reduce((acc, c) => acc + (c.paidAmount || 0), 0);
-  const totalChargesPending = clientCharges.reduce((acc, c) => acc + (c.remainingBalance || 0), 0);
+  const totalChargesPending = clientCharges.reduce((acc, c) => acc + getChargeRemainingBalance(c), 0);
 
   const totalServicesBilled = clientServices.reduce((acc, s) => acc + (s.totalAmount || 0), 0);
   const totalServicesPaid = clientServices.reduce((acc, s) => acc + (s.paidAmount || 0), 0);
@@ -239,7 +242,7 @@ export const ClientDossierSection: React.FC = () => {
             <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400" />
             <input
               type="text"
-              placeholder="Localizar por Nome, Telefone ou CPF..."
+              placeholder="Localizar por Nome, Telefone, CPF ou Placa..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="w-full pl-9 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-[#F28C1B] focus:bg-white outline-hidden"
@@ -301,7 +304,7 @@ export const ClientDossierSection: React.FC = () => {
             <div className="pt-3 border-t border-white/10 space-y-2">
               <span className="text-2xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
                 <Car className="w-3.5 h-3.5 text-[#F28C1B]" />
-                Veículos e Planos Contratados ({clientVehicles.length})
+                Veículos Vinculados ({clientVehicles.length})
               </span>
 
               {clientVehicles.length === 0 ? (
@@ -324,7 +327,7 @@ export const ClientDossierSection: React.FC = () => {
                           {formatCurrency(v.monthlyValue)}/mês
                         </span>
                         <span className="text-2xs text-slate-400">
-                          {v.planDescription || 'Plano Padrão'}
+                          {v.planDescription || 'Rastreamento Mensal'}
                         </span>
                       </div>
                     </div>
@@ -549,10 +552,13 @@ export const ClientDossierSection: React.FC = () => {
                       </tr>
                     ) : (
                       clientCharges.map((charge) => {
-                        const linked = clientPayments.filter((p) => p.chargeId === charge.id);
-                        const isPaid = charge.remainingBalance <= 0.009 || charge.status === 'pago';
+                        const linked = getPaymentsForCharge(clientPayments, charge.id);
+                        const remaining = getChargeRemainingBalance(charge);
+                        const normalizedDue = normalizeIsoDate(charge.dueDate);
+                        const todayIso = getTodayIsoDate();
+                        const isPaid = remaining <= 0.009 || charge.status === 'pago';
                         const isPartial = !isPaid && (charge.paidAmount > 0 || charge.status === 'parcial');
-                        const isOverdue = !isPaid && !isPartial && charge.dueDate < new Date().toISOString().slice(0, 10);
+                        const isOverdue = !isPaid && Boolean(normalizedDue) && normalizedDue < todayIso;
                         const statusLabel = isPaid ? 'Paga' : isPartial ? 'Parcial' : isOverdue ? 'Vencida' : 'Pendente';
 
                         return (
@@ -577,7 +583,7 @@ export const ClientDossierSection: React.FC = () => {
                               {formatCurrency(charge.paidAmount)}
                             </td>
                             <td className="py-3 px-4 text-right font-bold text-[#F28C1B]">
-                              {formatCurrency(charge.remainingBalance)}
+                              {formatCurrency(remaining)}
                             </td>
                             <td className="py-3 px-4 text-center">
                               <span
@@ -600,7 +606,7 @@ export const ClientDossierSection: React.FC = () => {
                                   {linked.map((p) => (
                                     <div key={p.id}>
                                       Recibo #{p.receiptNumber} ({formatDate(p.paymentDate)}):{' '}
-                                      <strong>{formatCurrency(p.amount)}</strong>
+                                      <strong>{formatCurrency(getPaymentAmountForCharge(p, charge.id))}</strong>
                                     </div>
                                   ))}
                                 </div>

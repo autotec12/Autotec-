@@ -153,7 +153,14 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
     updatedAt: foundCharge?.updatedAt || payment.createdAt,
   };
 
-  const svgContent = generateReceiptSvg(payment, effectiveCharge, effectiveClient, effectiveVehicle, effectiveCompany);
+  const svgContent = generateReceiptSvg(
+    payment,
+    effectiveCharge,
+    effectiveClient,
+    effectiveVehicle,
+    effectiveCompany,
+    charges
+  );
 
   // Sanitize SVG specifically for on-screen preview so it scales responsively without affecting download files
   const previewSvgContent = React.useMemo(() => {
@@ -193,7 +200,8 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
         effectiveCharge,
         effectiveClient,
         effectiveVehicle,
-        effectiveCompany
+        effectiveCompany,
+        charges
       );
       const res = await sharePdfFile(
         pdfBlob,
@@ -236,7 +244,8 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
         effectiveCharge,
         effectiveClient,
         effectiveVehicle,
-        effectiveCompany
+        effectiveCompany,
+        charges
       );
       downloadPdfFile(pdfBlob, `${baseFilename}.pdf`);
       showFeedback('success', 'Recibo oficial em PDF (A4) baixado com sucesso!');

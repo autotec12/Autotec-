@@ -15,7 +15,6 @@ import { GeneralManagementView } from './components/general/GeneralManagementVie
 import { DashboardView } from './components/dashboard/DashboardView';
 import { ClientsView } from './components/clients/ClientsView';
 import { VehiclesView } from './components/vehicles/VehiclesView';
-import { PlansView } from './components/plans/PlansView';
 import { BillingView } from './components/billing/BillingView';
 import { TechnicalServicesView } from './components/services/TechnicalServicesView';
 import { CompanyExpensesView } from './components/expenses/CompanyExpensesView';
@@ -32,7 +31,6 @@ const VALID_VIEWS = [
   'dashboard',
   'clients',
   'vehicles',
-  'plans',
   'billing',
   'services',
   'expenses',
@@ -203,7 +201,6 @@ function MainApp() {
               {currentView === 'dashboard' && <DashboardView onNavigate={handleNavigate} />}
               {currentView === 'clients' && <ClientsView />}
               {currentView === 'vehicles' && <VehiclesView />}
-              {currentView === 'plans' && <PlansView />}
               {currentView === 'billing' && <BillingView onNavigate={handleNavigate} />}
               {currentView === 'services' && <TechnicalServicesView />}
               {currentView === 'expenses' && <CompanyExpensesView />}

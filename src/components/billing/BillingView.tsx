@@ -20,7 +20,13 @@ import {
   getChargeRemainingBalance,
   canPostponeCharge,
   sortChargesByPriority,
+  getPaymentsForCharge,
+  isEarlyPaymentDate,
 } from '../../lib/calculations';
+import {
+  classifyRecordLinkStatus,
+  normalizePlate,
+} from '../../lib/clientVehicleLookup';
 import {
   Receipt,
   Search,
@@ -40,6 +46,7 @@ import {
   UserCheck,
   X,
   Car,
+  AlertTriangle,
 } from 'lucide-react';
 
 interface BillingViewProps {
@@ -153,9 +160,11 @@ export const BillingView: React.FC<BillingViewProps> = ({ onNavigate }) => {
 
       const effectiveMonth = getEffectiveBillingMonth(c);
       const matchesMonth = !selectedMonth || selectedMonth === 'todos' || effectiveMonth === selectedMonth;
+      const plateQuery = normalizePlate(searchTerm);
       const matchesSearch =
         c.clientName.toLowerCase().includes(searchTerm.toLowerCase()) ||
         c.vehiclePlate.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (plateQuery.length >= 2 && normalizePlate(c.vehiclePlate).includes(plateQuery)) ||
         c.vehicleModel.toLowerCase().includes(searchTerm.toLowerCase());
 
       const remaining = getChargeRemainingBalance(c);
@@ -186,18 +195,20 @@ export const BillingView: React.FC<BillingViewProps> = ({ onNavigate }) => {
   let monthlyPartialCount = 0;
 
   effectiveCharges.forEach((c) => {
-    if (getEffectiveBillingMonth(c) === selectedMonth && c.status !== 'cancelado') {
+    const matchesSummaryMonth =
+      !selectedMonth || selectedMonth === 'todos' || getEffectiveBillingMonth(c) === selectedMonth;
+    if (matchesSummaryMonth && c.status !== 'cancelado') {
       const remaining = getChargeRemainingBalance(c);
       const normalizedDue = normalizeIsoDate(c.dueDate);
       monthlyEstimated += Number(c.totalAmount) || 0;
       monthlyReceived += Number(c.paidAmount) || 0;
-      if (remaining > 0) {
+      if (c.status !== 'pago' && remaining > 0.009) {
         monthlyPending += remaining;
         if (normalizedDue && normalizedDue < today) {
           monthlyOverdue += remaining;
         }
       }
-      if (c.status === 'parcial' && remaining > 0) {
+      if (c.status === 'parcial' && remaining > 0.009) {
         monthlyPartialCount++;
       }
     }
@@ -223,7 +234,7 @@ export const BillingView: React.FC<BillingViewProps> = ({ onNavigate }) => {
             className="px-3.5 py-2 bg-[#30334F] hover:bg-[#222538] text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-xs cursor-pointer"
           >
             <CheckCircle2 className="w-4 h-4 text-[#F28C1B]" />
-            Recebimento Consolidado (Plano)
+            Recebimento Consolidado
           </button>
           <button
             onClick={() => setIsNewChargeModalOpen(true)}
@@ -234,11 +245,12 @@ export const BillingView: React.FC<BillingViewProps> = ({ onNavigate }) => {
           </button>
           <button
             onClick={handleGenerateMonthly}
-            disabled={isGenerating}
+            disabled={isGenerating || !selectedMonth || selectedMonth === 'todos'}
+            title={!selectedMonth || selectedMonth === 'todos' ? 'Selecione um mês específico para gerar faturas' : undefined}
             className="px-4 py-2 bg-[#F28C1B] hover:bg-[#d9770e] text-white rounded-xl text-xs font-bold shadow-md shadow-orange-500/20 flex items-center gap-2 transition disabled:opacity-50"
           >
             <RefreshCw className={`w-4 h-4 ${isGenerating ? 'animate-spin' : ''}`} />
-            {isGenerating ? 'Processando...' : `Gerar Faturas (${selectedMonth})`}
+            {isGenerating ? 'Processando...' : selectedMonth ? `Gerar Faturas (${selectedMonth})` : 'Selecione um Mês'}
           </button>
         </div>
       </div>
@@ -528,7 +540,11 @@ export const BillingView: React.FC<BillingViewProps> = ({ onNavigate }) => {
                   const client = clientMap.get(charge.clientId);
                   const vehicle = vehicleMap.get(charge.vehicleId);
 
-                  const chargePayments = payments.filter((p) => p.chargeId === charge.id);
+                  const chargePayments = getPaymentsForCharge(payments, charge.id);
+                  const wasPaidEarly =
+                    charge.status === 'pago' &&
+                    (isEarlyPaymentDate(charge.paymentDate, charge.dueDate) ||
+                      chargePayments.some((p) => isEarlyPaymentDate(p.paymentDate, charge.dueDate)));
 
                   return (
                     <tr key={charge.id} className="hover:bg-[#F8F9FB] transition">
@@ -550,6 +566,32 @@ export const BillingView: React.FC<BillingViewProps> = ({ onNavigate }) => {
                             {charge.vehicleModel}
                           </span>
                         </div>
+                        {(() => {
+                          const linkInfo = classifyRecordLinkStatus({
+                            clientId: charge.clientId,
+                            vehicleId: charge.vehicleId,
+                            isPlanCharge: charge.isPlanCharge,
+                            vehicleIds: charge.vehicleIds,
+                            clientsMap: clientMap,
+                            vehiclesMap: vehicleMap,
+                          });
+                          if (!linkInfo.isOrphan) return null;
+                          return (
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              {linkInfo.label && (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-50 text-amber-900 border border-amber-300 text-3xs font-extrabold">
+                                  <AlertTriangle className="w-2.5 h-2.5 text-amber-700 shrink-0" />
+                                  {linkInfo.label}
+                                </span>
+                              )}
+                              {linkInfo.secondaryLabel && (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-rose-50 text-rose-800 border border-rose-200 text-3xs font-bold">
+                                  {linkInfo.secondaryLabel}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
                         {/* Show original competence badge when viewing all history or when postponed to a different month */}
                         {(!selectedMonth || getEffectiveBillingMonth(charge) !== charge.referenceMonth) && (
                           <div className="mt-1">
@@ -589,8 +631,16 @@ export const BillingView: React.FC<BillingViewProps> = ({ onNavigate }) => {
                         >
                           {formatDate(charge.dueDate)}
                         </div>
-                        <div className="text-2xs text-slate-400">
-                          {isOverdue ? 'Vencido!' : isToday ? 'Vence Hoje!' : 'No prazo'}
+                        <div className={`text-2xs ${charge.status === 'pago' ? 'text-emerald-700 font-semibold' : 'text-slate-400'}`}>
+                          {charge.status === 'pago'
+                            ? wasPaidEarly
+                              ? 'Quitado antecipado'
+                              : 'Quitado'
+                            : isOverdue
+                            ? 'Vencido!'
+                            : isToday
+                            ? 'Vence Hoje!'
+                            : 'No prazo'}
                         </div>
                         {charge.isPostponed && (
                           <div className="mt-1 inline-flex flex-col gap-0.5">
@@ -711,12 +761,12 @@ export const BillingView: React.FC<BillingViewProps> = ({ onNavigate }) => {
                       {/* Actions */}
                       <td className="px-4 py-3.5 text-right">
                         <div className="flex items-center justify-end gap-1.5">
-                          {/* Payment & Postpone Buttons */}
-                          {isOpenCharge ? (
+                          {/* Payment & Postpone Buttons (sempre disponíveis para cobranças em aberto, inclusive antes do vencimento) */}
+                          {isOpenCharge && (
                             <>
                               <button
                                 onClick={() => setChargeForPayment(charge)}
-                                title="Registrar Recebimento (Integral ou Parcial)"
+                                title="Registrar Recebimento (Integral, Parcial ou Antecipado)"
                                 className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold shadow-xs flex items-center gap-1 transition cursor-pointer whitespace-nowrap"
                               >
                                 <DollarSign className="w-3.5 h-3.5" />
@@ -734,22 +784,23 @@ export const BillingView: React.FC<BillingViewProps> = ({ onNavigate }) => {
                                 </button>
                               )}
                             </>
-                          ) : (
-                            chargePayments.length > 0 && (
-                              <button
-                                onClick={() =>
-                                  setReceiptModalData({
-                                    payment: chargePayments[0],
-                                    charge,
-                                  })
-                                }
-                                title="Visualizar Recibo Oficial em SVG"
-                                className="px-2.5 py-1 bg-[#30334F]/10 hover:bg-[#30334F]/20 text-[#30334F] border border-[#30334F]/20 rounded-lg text-xs font-bold flex items-center gap-1 transition"
-                              >
-                                <FileText className="w-3.5 h-3.5 text-[#F28C1B]" />
-                                Recibo
-                              </button>
-                            )
+                          )}
+
+                          {/* Receipt button available for paid AND partially paid charges */}
+                          {chargePayments.length > 0 && (
+                            <button
+                              onClick={() =>
+                                setReceiptModalData({
+                                  payment: chargePayments[0],
+                                  charge,
+                                })
+                              }
+                              title="Visualizar Recibo Oficial em SVG"
+                              className="px-2.5 py-1 bg-[#30334F]/10 hover:bg-[#30334F]/20 text-[#30334F] border border-[#30334F]/20 rounded-lg text-xs font-bold flex items-center gap-1 transition cursor-pointer whitespace-nowrap"
+                            >
+                              <FileText className="w-3.5 h-3.5 text-[#F28C1B]" />
+                              Recibo
+                            </button>
                           )}
 
                           {/* WhatsApp Billing */}

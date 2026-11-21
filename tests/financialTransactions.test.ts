@@ -2,7 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Charge, Client, Payment, Plan, Vehicle } from '../src/types/index.ts';
 import {
+  calculateDashboardMetrics,
   consolidateClientFinancials,
+  getChargeEffectiveOpenBalance,
+  getEffectiveCharges,
   planMonthlyCharges,
   roundCurrencyValue,
 } from '../src/lib/calculations.ts';
@@ -1323,5 +1326,911 @@ test('ETAPA A - 12: Valores financeiros são tratados com precisão em centavos 
 
   const consolidated = consolidateClientFinancials(client, vehicles, store.getAllCharges());
   assert.equal(consolidated.totalMonthlyValue, 100);
-  assert.equal(consolidated.totalPending, 139.98);
+  // Etapa A2: R$ 19,99 de abril foi incorporado em c1 (R$ 53,32) e marcado como consumido na origem,
+  // eliminando dupla contagem (saldo real em aberto = 53,32 + 33,33 + 33,34 = 119,99).
+  assert.equal(consolidated.totalPending, 119.99);
+  const srcApril = store.getCharge('chg_prev_cents')!;
+  assert.equal(srcApril.carriedBalanceConsumed, true);
+  assert.equal(srcApril.carriedToChargeId, c1.id);
+  assert.equal(srcApril.carriedBalanceAmount, 19.99);
+  assert.equal(srcApril.remainingBalance, 19.99);
+  assert.deepEqual(c1.carriedFromChargeIds, ['chg_prev_cents']);
+});
+
+// ============================================================================
+// SUÍTE ETAPA A2 — CORREÇÃO DOS DOIS ACHADOS DE GRAVIDADE ALTA (12 CENÁRIOS)
+// ============================================================================
+
+test('ETAPA A2 - 1: Plano antigo cobre dois veículos (A e B) e não oculta a cobrança individual do terceiro (C)', () => {
+  const planChargeAB = makeCharge({
+    id: 'chg_plan_ab_2026-05',
+    clientId: 'cli_a2_1',
+    vehicleId: 'veh_A',
+    vehicleIds: ['veh_A', 'veh_B'],
+    vehiclePlate: 'AAA1111, BBB2222',
+    vehiclePlates: ['AAA1111', 'BBB2222'],
+    referenceMonth: '2026-05',
+    originalMonthlyValue: 150,
+    totalAmount: 150,
+    paidAmount: 0,
+    remainingBalance: 150,
+    status: 'pendente',
+    isPlanCharge: true,
+    planId: 'plan_ab',
+    planName: 'Plano 2 Carros',
+  });
+
+  const individualC = makeCharge({
+    id: 'chg_veh_veh_C_2026-05',
+    clientId: 'cli_a2_1',
+    vehicleId: 'veh_C',
+    vehiclePlate: 'CCC3333',
+    referenceMonth: '2026-05',
+    originalMonthlyValue: 80,
+    totalAmount: 80,
+    paidAmount: 0,
+    remainingBalance: 80,
+    status: 'pendente',
+    isPlanCharge: false,
+  });
+
+  const effective = getEffectiveCharges([planChargeAB, individualC]);
+  assert.equal(effective.length, 2);
+  assert.ok(effective.some((c) => c.id === 'chg_plan_ab_2026-05'));
+  assert.ok(effective.some((c) => c.id === 'chg_veh_veh_C_2026-05'));
+
+  // Também valida quando a cobertura legada do plano está registrada apenas via vehiclePlate (CSV) sem vehicleIds
+  const planChargePlatesOnly = makeCharge({
+    ...planChargeAB,
+    id: 'chg_plan_plates_2026-05',
+    vehicleId: 'plan_legacy_holder',
+    vehicleIds: undefined,
+    vehiclePlates: undefined,
+    vehiclePlate: 'AAA1111, BBB2222',
+  });
+  const effectivePlates = getEffectiveCharges([planChargePlatesOnly, individualC]);
+  assert.equal(effectivePlates.length, 2);
+  assert.ok(effectivePlates.some((c) => c.id === 'chg_veh_veh_C_2026-05'));
+
+  // Indicadores financeiros dependentes de getEffectiveCharges refletem corretamente R$ 150 + R$ 80 = R$ 230
+  const client = makeClient({ id: 'cli_a2_1' });
+  const vehicles = [
+    makeVehicle({ id: 'veh_A', clientId: 'cli_a2_1', plate: 'AAA1111', monthlyValue: 75 }),
+    makeVehicle({ id: 'veh_B', clientId: 'cli_a2_1', plate: 'BBB2222', monthlyValue: 75 }),
+    makeVehicle({ id: 'veh_C', clientId: 'cli_a2_1', plate: 'CCC3333', monthlyValue: 80 }),
+  ];
+  const consolidated = consolidateClientFinancials(client, vehicles, [planChargeAB, individualC]);
+  assert.equal(consolidated.totalPending, 230);
+  const dashboard = calculateDashboardMetrics([client], vehicles, [planChargeAB, individualC], []);
+  assert.equal(dashboard.totalPendingBalance, 230);
+});
+
+test('ETAPA A2 - 2: Plano antigo cobre efetivamente um veículo e impede duplicidade para esse veículo', () => {
+  const planChargeAB = makeCharge({
+    id: 'chg_plan_cov_2026-05',
+    clientId: 'cli_a2_2',
+    vehicleId: 'veh_A',
+    vehicleIds: ['veh_A', 'veh_B'],
+    vehiclePlate: 'AAA1111, BBB2222',
+    vehiclePlates: ['AAA1111', 'BBB2222'],
+    referenceMonth: '2026-05',
+    totalAmount: 150,
+    remainingBalance: 150,
+    status: 'pendente',
+    isPlanCharge: true,
+  });
+
+  const dupA = makeCharge({
+    id: 'chg_veh_veh_A_2026-05',
+    clientId: 'cli_a2_2',
+    vehicleId: 'veh_A',
+    vehiclePlate: 'AAA1111',
+    referenceMonth: '2026-05',
+    totalAmount: 80,
+    paidAmount: 0,
+    remainingBalance: 80,
+    status: 'pendente',
+    isPlanCharge: false,
+  });
+
+  const dupBByPlate = makeCharge({
+    id: 'chg_veh_veh_B_legacy_2026-05',
+    clientId: 'cli_a2_2',
+    vehicleId: 'veh_B_legacy_id',
+    vehiclePlate: 'bbb2222',
+    referenceMonth: '2026-05',
+    totalAmount: 80,
+    paidAmount: 0,
+    remainingBalance: 80,
+    status: 'pendente',
+    isPlanCharge: false,
+  });
+
+  const uncoveredC = makeCharge({
+    id: 'chg_veh_veh_C_2026-05',
+    clientId: 'cli_a2_2',
+    vehicleId: 'veh_C',
+    vehiclePlate: 'CCC3333',
+    referenceMonth: '2026-05',
+    totalAmount: 60,
+    paidAmount: 0,
+    remainingBalance: 60,
+    status: 'pendente',
+    isPlanCharge: false,
+  });
+
+  const effective = getEffectiveCharges([planChargeAB, dupA, dupBByPlate, uncoveredC]);
+  assert.deepEqual(
+    effective.map((c) => c.id),
+    ['chg_plan_cov_2026-05', 'chg_veh_veh_C_2026-05']
+  );
+
+  // Fallback conservador: plano legado sem vehicleIds nem vehiclePlates/vehiclePlate continua protegendo contra duplicidade
+  const legacyNoListPlan = makeCharge({
+    id: 'chg_plan_nolist_2026-05',
+    clientId: 'cli_a2_2',
+    vehicleId: 'plan_generic',
+    vehicleIds: undefined,
+    vehiclePlates: undefined,
+    vehiclePlate: '',
+    referenceMonth: '2026-05',
+    isPlanCharge: true,
+    status: 'pendente',
+  });
+  const effectiveLegacy = getEffectiveCharges([legacyNoListPlan, uncoveredC]);
+  assert.deepEqual(
+    effectiveLegacy.map((c) => c.id),
+    ['chg_plan_nolist_2026-05']
+  );
+
+  // Plano cancelado NÃO oculta cobrança individual
+  const cancelledPlan = makeCharge({ ...planChargeAB, status: 'cancelado' });
+  const effectiveWithCancelled = getEffectiveCharges([cancelledPlan, dupA]);
+  assert.equal(effectiveWithCancelled.length, 2);
+});
+
+test('ETAPA A2 - 3: Cobranças individuais de competências diferentes não são ocultadas', () => {
+  const planMay = makeCharge({
+    id: 'chg_plan_may',
+    clientId: 'cli_a2_3',
+    vehicleId: 'veh_A',
+    vehicleIds: ['veh_A', 'veh_B'],
+    vehiclePlate: 'AAA1111, BBB2222',
+    vehiclePlates: ['AAA1111', 'BBB2222'],
+    referenceMonth: '2026-05',
+    status: 'pendente',
+    isPlanCharge: true,
+  });
+
+  const indJuneA = makeCharge({
+    id: 'chg_veh_veh_A_2026-06',
+    clientId: 'cli_a2_3',
+    vehicleId: 'veh_A',
+    vehiclePlate: 'AAA1111',
+    referenceMonth: '2026-06',
+    status: 'pendente',
+    paidAmount: 0,
+    isPlanCharge: false,
+  });
+
+  const indAprilB = makeCharge({
+    id: 'chg_veh_veh_B_2026-04',
+    clientId: 'cli_a2_3',
+    vehicleId: 'veh_B',
+    vehiclePlate: 'BBB2222',
+    referenceMonth: '2026-04',
+    status: 'pendente',
+    paidAmount: 0,
+    isPlanCharge: false,
+  });
+
+  const effective = getEffectiveCharges([planMay, indJuneA, indAprilB]);
+  assert.equal(effective.length, 3);
+  assert.ok(effective.some((c) => c.id === 'chg_veh_veh_A_2026-06'));
+  assert.ok(effective.some((c) => c.id === 'chg_veh_veh_B_2026-04'));
+});
+
+test('ETAPA A2 - 4: Cobranças parciais, pagas e adiadas continuam visíveis mesmo com plano na mesma competência', () => {
+  const planMay = makeCharge({
+    id: 'chg_plan_vis_2026-05',
+    clientId: 'cli_a2_4',
+    vehicleId: 'veh_A',
+    vehicleIds: ['veh_A', 'veh_B', 'veh_C'],
+    vehiclePlate: 'AAA1111, BBB2222, CCC3333',
+    vehiclePlates: ['AAA1111', 'BBB2222', 'CCC3333'],
+    referenceMonth: '2026-05',
+    status: 'pendente',
+    isPlanCharge: true,
+  });
+
+  const partialA = makeCharge({
+    id: 'chg_ind_partial_A',
+    clientId: 'cli_a2_4',
+    vehicleId: 'veh_A',
+    vehiclePlate: 'AAA1111',
+    referenceMonth: '2026-05',
+    status: 'parcial',
+    paidAmount: 40,
+    remainingBalance: 60,
+    isPlanCharge: false,
+  });
+
+  const paidB = makeCharge({
+    id: 'chg_ind_paid_B',
+    clientId: 'cli_a2_4',
+    vehicleId: 'veh_B',
+    vehiclePlate: 'BBB2222',
+    referenceMonth: '2026-05',
+    status: 'pago',
+    paidAmount: 100,
+    remainingBalance: 0,
+    isPlanCharge: false,
+  });
+
+  const postponedC = makeCharge({
+    id: 'chg_ind_postponed_C',
+    clientId: 'cli_a2_4',
+    vehicleId: 'veh_C',
+    vehiclePlate: 'CCC3333',
+    referenceMonth: '2026-05',
+    status: 'pendente',
+    paidAmount: 0,
+    remainingBalance: 100,
+    isPostponed: true,
+    originalDueDate: '2026-05-10',
+    dueDate: '2026-05-25',
+    isPlanCharge: false,
+  });
+
+  const effective = getEffectiveCharges([planMay, partialA, paidB, postponedC]);
+  assert.equal(effective.length, 4);
+  assert.ok(effective.some((c) => c.id === 'chg_ind_partial_A'));
+  assert.ok(effective.some((c) => c.id === 'chg_ind_paid_B'));
+  assert.ok(effective.some((c) => c.id === 'chg_ind_postponed_C'));
+});
+
+test('ETAPA A2 - 5: Saldo parcial é transportado uma única vez com rastreabilidade explícita, preservação histórica e sem dupla contagem', async () => {
+  const store = new InMemoryTransactionalFirestore();
+  const client = makeClient({ id: 'cli_a2_5' });
+  const vCarry = makeVehicle({ id: 'veh_carry', clientId: 'cli_a2_5', plate: 'CAR0001', monthlyValue: 100, dueDay: 10 });
+  const vSpecDate = makeVehicle({ id: 'veh_spec', clientId: 'cli_a2_5', plate: 'SPC0002', monthlyValue: 90, dueDay: 12 });
+  const vNegot = makeVehicle({ id: 'veh_neg', clientId: 'cli_a2_5', plate: 'NEG0003', monthlyValue: 80, dueDay: 15 });
+
+  // Origem com next_month -> deve transportar R$ 60,00
+  store.seedCharge(
+    makeCharge({
+      id: 'chg_src_carry_apr',
+      clientId: 'cli_a2_5',
+      vehicleId: 'veh_carry',
+      vehiclePlate: 'CAR0001',
+      referenceMonth: '2026-04',
+      originalMonthlyValue: 100,
+      totalAmount: 100,
+      paidAmount: 40,
+      remainingBalance: 60,
+      status: 'parcial',
+      balanceHandling: 'next_month',
+      dueDate: '2026-04-10',
+    })
+  );
+
+  // Origem com specific_date -> NÃO deve transportar automaticamente
+  store.seedCharge(
+    makeCharge({
+      id: 'chg_src_spec_apr',
+      clientId: 'cli_a2_5',
+      vehicleId: 'veh_spec',
+      vehiclePlate: 'SPC0002',
+      referenceMonth: '2026-04',
+      originalMonthlyValue: 90,
+      totalAmount: 90,
+      paidAmount: 30,
+      remainingBalance: 60,
+      status: 'parcial',
+      balanceHandling: 'specific_date',
+      balanceScheduledDate: '2026-04-28',
+      dueDate: '2026-04-12',
+    })
+  );
+
+  // Origem com open_negotiation -> NÃO deve transportar automaticamente
+  store.seedCharge(
+    makeCharge({
+      id: 'chg_src_neg_apr',
+      clientId: 'cli_a2_5',
+      vehicleId: 'veh_neg',
+      vehiclePlate: 'NEG0003',
+      referenceMonth: '2026-04',
+      originalMonthlyValue: 80,
+      totalAmount: 80,
+      paidAmount: 20,
+      remainingBalance: 60,
+      status: 'parcial',
+      balanceHandling: 'open_negotiation',
+      dueDate: '2026-04-15',
+    })
+  );
+
+  const res = await executeMonthlyChargeGeneration(store, {
+    month: '2026-05',
+    clients: [client],
+    vehicles: [vCarry, vSpecDate, vNegot],
+    charges: store.getAllCharges(),
+    createdBy: 'admin_uid',
+    now: '2026-05-01T10:00:00.000Z',
+  });
+
+  assert.equal(res.created, 3);
+  assert.deepEqual(res.carriedSourceIds, ['chg_src_carry_apr']);
+
+  // Destino recebe exatamente R$ 60,00 e mantém vínculo explícito com a origem
+  const destCarry = store.getCharge('chg_veh_veh_carry_2026-05')!;
+  assert.equal(destCarry.originalMonthlyValue, 100);
+  assert.equal(destCarry.previousBalanceCarried, 60);
+  assert.equal(destCarry.totalAmount, 160);
+  assert.equal(destCarry.remainingBalance, 160);
+  assert.deepEqual(destCarry.carriedFromChargeIds, ['chg_src_carry_apr']);
+  assert.deepEqual(destCarry.carriedBalanceSources, [
+    { sourceChargeId: 'chg_src_carry_apr', sourceReferenceMonth: '2026-04', amount: 60 },
+  ]);
+
+  // Origem é marcada como consumida com vínculo explícito ao destino, preservando histórico intacto
+  const srcCarry = store.getCharge('chg_src_carry_apr')!;
+  assert.equal(srcCarry.carriedBalanceConsumed, true);
+  assert.equal(srcCarry.carriedToChargeId, 'chg_veh_veh_carry_2026-05');
+  assert.equal(srcCarry.carriedToReferenceMonth, '2026-05');
+  assert.equal(srcCarry.carriedBalanceAmount, 60);
+  assert.equal(srcCarry.carriedBalanceAt, '2026-05-01T10:00:00.000Z');
+  assert.equal(srcCarry.originalMonthlyValue, 100);
+  assert.equal(srcCarry.paidAmount, 40);
+  assert.equal(srcCarry.remainingBalance, 60);
+  assert.equal(srcCarry.status, 'parcial');
+  assert.equal(getChargeEffectiveOpenBalance(srcCarry), 0);
+
+  // specific_date e open_negotiation permanecem preservados sem transporte automático
+  const destSpec = store.getCharge('chg_veh_veh_spec_2026-05')!;
+  const destNeg = store.getCharge('chg_veh_veh_neg_2026-05')!;
+  assert.equal(destSpec.previousBalanceCarried, 0);
+  assert.equal(destSpec.totalAmount, 90);
+  assert.equal(destNeg.previousBalanceCarried, 0);
+  assert.equal(destNeg.totalAmount, 80);
+  assert.equal(store.getCharge('chg_src_spec_apr')!.carriedBalanceConsumed, undefined);
+  assert.equal(store.getCharge('chg_src_neg_apr')!.carriedBalanceConsumed, undefined);
+
+  // Sem dupla contagem: saldo total em aberto = 160 (vCarry) + 60+90 (vSpec) + 60+80 (vNeg) = 450
+  const consolidated = consolidateClientFinancials(client, [vCarry, vSpecDate, vNegot], store.getAllCharges());
+  assert.equal(consolidated.totalPending, 450);
+  const metrics = calculateDashboardMetrics([client], [vCarry, vSpecDate, vNegot], store.getAllCharges(), []);
+  assert.equal(metrics.totalPendingBalance, 450);
+});
+
+test('ETAPA A2 - 6: Repetir a geração mensal na mesma competência não transporta novamente o mesmo saldo', async () => {
+  const store = new InMemoryTransactionalFirestore();
+  const client = makeClient({ id: 'cli_a2_6' });
+  const vehicle = makeVehicle({ id: 'veh_a2_6', clientId: 'cli_a2_6', monthlyValue: 100 });
+  const aprilCharge = makeCharge({
+    id: 'chg_apr_a2_6',
+    clientId: 'cli_a2_6',
+    vehicleId: 'veh_a2_6',
+    referenceMonth: '2026-04',
+    totalAmount: 100,
+    paidAmount: 25,
+    remainingBalance: 75,
+    status: 'parcial',
+    balanceHandling: 'next_month',
+    dueDate: '2026-04-10',
+  });
+  store.seedCharge(aprilCharge);
+
+  const run1 = await executeMonthlyChargeGeneration(store, {
+    month: '2026-05',
+    clients: [client],
+    vehicles: [vehicle],
+    charges: store.getAllCharges(),
+  });
+  assert.equal(run1.created, 1);
+  assert.deepEqual(run1.carriedSourceIds, ['chg_apr_a2_6']);
+
+  // Repetição com estado sincronizado
+  const run2 = await executeMonthlyChargeGeneration(store, {
+    month: '2026-05',
+    clients: [client],
+    vehicles: [vehicle],
+    charges: store.getAllCharges(),
+  });
+  assert.equal(run2.created, 0);
+  assert.equal(run2.skipped, 1);
+  assert.equal(run2.carriedSourceIds.length, 0);
+
+  // Repetição com cache local defasado (passando a origem ainda sem flag de consumo)
+  const run3Stale = await executeMonthlyChargeGeneration(store, {
+    month: '2026-05',
+    clients: [client],
+    vehicles: [vehicle],
+    charges: [aprilCharge],
+  });
+  assert.equal(run3Stale.created, 0);
+  assert.equal(run3Stale.skipped, 1);
+  assert.equal(run3Stale.carriedSourceIds.length, 0);
+
+  assert.equal(store.getAllCharges().length, 2);
+  assert.equal(store.getCharge('chg_veh_veh_a2_6_2026-05')!.totalAmount, 175);
+});
+
+test('ETAPA A2 - 7: Gerar duas competências consecutivas não duplica o saldo original', async () => {
+  const store = new InMemoryTransactionalFirestore();
+  const client = makeClient({ id: 'cli_a2_7' });
+  const vehicle = makeVehicle({ id: 'veh_a2_7', clientId: 'cli_a2_7', monthlyValue: 100 });
+  const aprilCharge = makeCharge({
+    id: 'chg_apr_a2_7',
+    clientId: 'cli_a2_7',
+    vehicleId: 'veh_a2_7',
+    referenceMonth: '2026-04',
+    totalAmount: 100,
+    paidAmount: 45,
+    remainingBalance: 55,
+    status: 'parcial',
+    balanceHandling: 'next_month',
+    dueDate: '2026-04-10',
+  });
+  store.seedCharge(aprilCharge);
+
+  // Competência 1: Maio recebe os R$ 55,00
+  const mayRes = await executeMonthlyChargeGeneration(store, {
+    month: '2026-05',
+    clients: [client],
+    vehicles: [vehicle],
+    charges: store.getAllCharges(),
+  });
+  assert.equal(mayRes.created, 1);
+  assert.equal(store.getCharge('chg_veh_veh_a2_7_2026-05')!.previousBalanceCarried, 55);
+  assert.equal(store.getCharge('chg_veh_veh_a2_7_2026-05')!.totalAmount, 155);
+
+  // Competência 2: Junho NÃO pode transportar os R$ 55,00 de abril novamente (nem mesmo com cache defasado!)
+  const juneRes = await executeMonthlyChargeGeneration(store, {
+    month: '2026-06',
+    clients: [client],
+    vehicles: [vehicle],
+    charges: [aprilCharge], // simula snapshot desatualizado onde abril ainda parecia não consumido
+  });
+  assert.equal(juneRes.created, 1);
+  assert.equal(juneRes.carriedSourceIds.length, 0);
+
+  const juneCharge = store.getCharge('chg_veh_veh_a2_7_2026-06')!;
+  assert.equal(juneCharge.previousBalanceCarried, 0);
+  assert.equal(juneCharge.totalAmount, 100);
+  assert.equal(juneCharge.carriedFromChargeIds, undefined);
+
+  // Competência 3: Julho também não re-transporta abril
+  const julyRes = await executeMonthlyChargeGeneration(store, {
+    month: '2026-07',
+    clients: [client],
+    vehicles: [vehicle],
+    charges: store.getAllCharges(),
+  });
+  assert.equal(julyRes.created, 1);
+  assert.equal(store.getCharge('chg_veh_veh_a2_7_2026-07')!.previousBalanceCarried, 0);
+  assert.equal(store.getCharge('chg_veh_veh_a2_7_2026-07')!.totalAmount, 100);
+
+  // Origem continua apontando exclusivamente para Maio
+  assert.equal(store.getCharge('chg_apr_a2_7')!.carriedToChargeId, 'chg_veh_veh_a2_7_2026-05');
+  assert.equal(
+    consolidateClientFinancials(client, [vehicle], store.getAllCharges()).totalPending,
+    355 // 155 (mai) + 100 (jun) + 100 (jul), zero dupla contagem de abril
+  );
+});
+
+test('ETAPA A2 - 8: Duas operações concorrentes não transportam o mesmo saldo duas vezes', async () => {
+  // 8A. Concorrência na mesma competência (2026-05)
+  const storeSame = new InMemoryTransactionalFirestore();
+  const client = makeClient({ id: 'cli_a2_8' });
+  const vehicle = makeVehicle({ id: 'veh_a2_8', clientId: 'cli_a2_8', monthlyValue: 100 });
+  const aprilCharge = makeCharge({
+    id: 'chg_apr_a2_8',
+    clientId: 'cli_a2_8',
+    vehicleId: 'veh_a2_8',
+    referenceMonth: '2026-04',
+    totalAmount: 100,
+    paidAmount: 30,
+    remainingBalance: 70,
+    status: 'parcial',
+    balanceHandling: 'next_month',
+    dueDate: '2026-04-10',
+  });
+  storeSame.seedCharge(aprilCharge);
+
+  let hitsSame = 0;
+  let releaseSame!: () => void;
+  const barrierSame = new Promise<void>((resolve) => {
+    releaseSame = resolve;
+  });
+  storeSame.onCommitBarrier = async () => {
+    hitsSame++;
+    if (hitsSame === 2) {
+      storeSame.onCommitBarrier = null;
+      releaseSame();
+    } else if (hitsSame === 1) {
+      await barrierSame;
+    }
+  };
+
+  const [same1, same2] = await Promise.all([
+    executeMonthlyChargeGeneration(storeSame, {
+      month: '2026-05',
+      clients: [client],
+      vehicles: [vehicle],
+      charges: [aprilCharge],
+    }),
+    executeMonthlyChargeGeneration(storeSame, {
+      month: '2026-05',
+      clients: [client],
+      vehicles: [vehicle],
+      charges: [aprilCharge],
+    }),
+  ]);
+
+  assert.equal(same1.created + same2.created, 1);
+  assert.equal(same1.carriedSourceIds.length + same2.carriedSourceIds.length, 1);
+  assert.equal(storeSame.getCharge('chg_veh_veh_a2_8_2026-05')!.previousBalanceCarried, 70);
+  assert.equal(storeSame.getCharge('chg_apr_a2_8')!.carriedBalanceConsumed, true);
+
+  // 8B. Concorrência entre duas competências diferentes (2026-05 e 2026-06) partindo do mesmo snapshot inicial!
+  const storeDiff = new InMemoryTransactionalFirestore();
+  storeDiff.seedCharge(aprilCharge);
+
+  let hitsDiff = 0;
+  let releaseDiff!: () => void;
+  const barrierDiff = new Promise<void>((resolve) => {
+    releaseDiff = resolve;
+  });
+  storeDiff.onCommitBarrier = async () => {
+    hitsDiff++;
+    if (hitsDiff === 2) {
+      storeDiff.onCommitBarrier = null;
+      releaseDiff();
+    } else if (hitsDiff === 1) {
+      await barrierDiff;
+    }
+  };
+
+  const [resMay, resJune] = await Promise.all([
+    executeMonthlyChargeGeneration(storeDiff, {
+      month: '2026-05',
+      clients: [client],
+      vehicles: [vehicle],
+      charges: [aprilCharge],
+    }),
+    executeMonthlyChargeGeneration(storeDiff, {
+      month: '2026-06',
+      clients: [client],
+      vehicles: [vehicle],
+      charges: [aprilCharge],
+    }),
+  ]);
+
+  assert.equal(resMay.created, 1);
+  assert.equal(resJune.created, 1);
+  assert.equal(resMay.carriedSourceIds.length + resJune.carriedSourceIds.length, 1);
+  assert.ok(storeDiff.transactionRetryCount >= 1);
+
+  const mayCharge = storeDiff.getCharge('chg_veh_veh_a2_8_2026-05')!;
+  const juneCharge = storeDiff.getCharge('chg_veh_veh_a2_8_2026-06')!;
+  const totalCarriedAcrossBoth = roundCurrency(
+    mayCharge.previousBalanceCarried + juneCharge.previousBalanceCarried
+  );
+  assert.equal(totalCarriedAcrossBoth, 70);
+
+  const srcAfter = storeDiff.getCharge('chg_apr_a2_8')!;
+  assert.equal(srcAfter.carriedBalanceConsumed, true);
+  assert.equal(srcAfter.carriedBalanceAmount, 70);
+  assert.ok(
+    srcAfter.carriedToChargeId === mayCharge.id || srcAfter.carriedToChargeId === juneCharge.id
+  );
+});
+
+test('ETAPA A2 - 9: Falha durante a transação não deixa origem consumida sem destino', async () => {
+  const store = new InMemoryTransactionalFirestore();
+  const client = makeClient({ id: 'cli_a2_9' });
+  const vehicle = makeVehicle({ id: 'veh_a2_9', clientId: 'cli_a2_9', monthlyValue: 100 });
+  store.seedCharge(
+    makeCharge({
+      id: 'chg_apr_a2_9',
+      clientId: 'cli_a2_9',
+      vehicleId: 'veh_a2_9',
+      referenceMonth: '2026-04',
+      totalAmount: 100,
+      paidAmount: 20,
+      remainingBalance: 80,
+      status: 'parcial',
+      balanceHandling: 'next_month',
+      dueDate: '2026-04-10',
+    })
+  );
+
+  store.failNextCommitError = new Error('UNAVAILABLE: falha simulada durante transporte de saldo');
+
+  await assert.rejects(
+    () =>
+      executeMonthlyChargeGeneration(store, {
+        month: '2026-05',
+        clients: [client],
+        vehicles: [vehicle],
+        charges: store.getAllCharges(),
+      }),
+    /falha simulada durante transporte/
+  );
+
+  // Rollback completo: destino NÃO existe e origem continua intacta e NÃO consumida
+  assert.equal(store.getCharge('chg_veh_veh_a2_9_2026-05'), undefined);
+  const srcAfterFail = store.getCharge('chg_apr_a2_9')!;
+  assert.equal(srcAfterFail.carriedBalanceConsumed, undefined);
+  assert.equal(srcAfterFail.carriedToChargeId, undefined);
+  assert.equal(srcAfterFail.carriedBalanceAmount, undefined);
+  assert.equal(srcAfterFail.remainingBalance, 80);
+  assert.equal(getChargeEffectiveOpenBalance(srcAfterFail), 80);
+});
+
+test('ETAPA A2 - 10: Falha seguida de nova tentativa não perde nem duplica o transporte', async () => {
+  const store = new InMemoryTransactionalFirestore();
+  const client = makeClient({ id: 'cli_a2_10' });
+  const vehicle = makeVehicle({ id: 'veh_a2_10', clientId: 'cli_a2_10', monthlyValue: 100 });
+  store.seedCharge(
+    makeCharge({
+      id: 'chg_apr_a2_10',
+      clientId: 'cli_a2_10',
+      vehicleId: 'veh_a2_10',
+      referenceMonth: '2026-04',
+      totalAmount: 100,
+      paidAmount: 65,
+      remainingBalance: 35,
+      status: 'parcial',
+      balanceHandling: 'next_month',
+      dueDate: '2026-04-10',
+    })
+  );
+
+  // Tentativa 1 falha no commit
+  store.failNextCommitError = new Error('DEADLINE_EXCEEDED: erro temporário');
+  await assert.rejects(
+    () =>
+      executeMonthlyChargeGeneration(store, {
+        month: '2026-05',
+        clients: [client],
+        vehicles: [vehicle],
+        charges: store.getAllCharges(),
+      }),
+    /erro temporário/
+  );
+  assert.equal(store.getCharge('chg_veh_veh_a2_10_2026-05'), undefined);
+  assert.equal(store.getCharge('chg_apr_a2_10')!.carriedBalanceConsumed, undefined);
+
+  // Tentativa 2 (retomada) sucede atomicamente
+  const retryRes = await executeMonthlyChargeGeneration(store, {
+    month: '2026-05',
+    clients: [client],
+    vehicles: [vehicle],
+    charges: store.getAllCharges(),
+  });
+  assert.equal(retryRes.created, 1);
+  assert.deepEqual(retryRes.carriedSourceIds, ['chg_apr_a2_10']);
+  assert.equal(store.getCharge('chg_veh_veh_a2_10_2026-05')!.totalAmount, 135);
+  assert.equal(store.getCharge('chg_apr_a2_10')!.carriedBalanceConsumed, true);
+  assert.equal(store.getCharge('chg_apr_a2_10')!.carriedToChargeId, 'chg_veh_veh_a2_10_2026-05');
+
+  // Tentativa 3 (replay após sucesso) é idempotente e não duplica
+  const replayRes = await executeMonthlyChargeGeneration(store, {
+    month: '2026-05',
+    clients: [client],
+    vehicles: [vehicle],
+    charges: store.getAllCharges(),
+  });
+  assert.equal(replayRes.created, 0);
+  assert.equal(replayRes.skipped, 1);
+  assert.equal(replayRes.carriedSourceIds.length, 0);
+  assert.equal(store.getCharge('chg_veh_veh_a2_10_2026-05')!.totalAmount, 135);
+});
+
+test('ETAPA A2 - 11: Saldo de cobrança antiga de plano (isPlanCharge) não é atribuído automaticamente a um único veículo', async () => {
+  const store = new InMemoryTransactionalFirestore();
+  const client = makeClient({ id: 'cli_a2_11', planId: 'plan_old', planName: 'Plano Frota' });
+  const v1 = makeVehicle({ id: 'veh_p11_1', clientId: 'cli_a2_11', plate: 'PLA1111', monthlyValue: 100 });
+  const v2 = makeVehicle({ id: 'veh_p11_2', clientId: 'cli_a2_11', plate: 'PLA2222', monthlyValue: 80 });
+
+  const legacyPlanPartial = makeCharge({
+    id: 'chg_plan_old_apr',
+    clientId: 'cli_a2_11',
+    vehicleId: 'veh_p11_1', // Mesmo possuindo vehicleId principal, é cobrança de plano!
+    vehicleIds: ['veh_p11_1', 'veh_p11_2'],
+    vehiclePlate: 'PLA1111, PLA2222',
+    vehiclePlates: ['PLA1111', 'PLA2222'],
+    referenceMonth: '2026-04',
+    originalMonthlyValue: 150,
+    totalAmount: 150,
+    paidAmount: 50,
+    remainingBalance: 100,
+    status: 'parcial',
+    balanceHandling: 'next_month',
+    isPlanCharge: true,
+    planId: 'plan_old',
+    planName: 'Plano Frota',
+    dueDate: '2026-04-10',
+  });
+  store.seedCharge(legacyPlanPartial);
+
+  const res = await executeMonthlyChargeGeneration(store, {
+    month: '2026-05',
+    clients: [client],
+    vehicles: [v1, v2],
+    charges: store.getAllCharges(),
+  });
+
+  assert.equal(res.created, 2);
+  assert.equal(res.carriedSourceIds.length, 0);
+  assert.deepEqual(res.untransferredPlanChargeIds, ['chg_plan_old_apr']);
+
+  // Nenhum dos veículos recebeu o saldo de R$ 100,00 do plano antigo
+  const c1 = store.getCharge('chg_veh_veh_p11_1_2026-05')!;
+  const c2 = store.getCharge('chg_veh_veh_p11_2_2026-05')!;
+  assert.equal(c1.previousBalanceCarried, 0);
+  assert.equal(c1.totalAmount, 100);
+  assert.equal(c1.carriedFromChargeIds, undefined);
+  assert.equal(c2.previousBalanceCarried, 0);
+  assert.equal(c2.totalAmount, 80);
+  assert.equal(c2.carriedFromChargeIds, undefined);
+
+  // Saldo legado do plano permanece preservado e cobrável (não foi perdido nem consumido)
+  const planAfter = store.getCharge('chg_plan_old_apr')!;
+  assert.equal(planAfter.remainingBalance, 100);
+  assert.equal(planAfter.carriedBalanceConsumed, undefined);
+  assert.equal(getChargeEffectiveOpenBalance(planAfter), 100);
+
+  // Total pendente consolidado = 100 (plano abril preservado) + 100 (v1 maio) + 80 (v2 maio) = 280
+  const consolidated = consolidateClientFinancials(client, [v1, v2], store.getAllCharges());
+  assert.equal(consolidated.totalPending, 280);
+});
+
+test('ETAPA A2 - 12: Saldo parcial permanece correto após pagamentos posteriores (antes e depois do transporte)', async () => {
+  const store = new InMemoryTransactionalFirestore();
+  const client = makeClient({ id: 'cli_a2_12' });
+  const vehicle = makeVehicle({ id: 'veh_a2_12', clientId: 'cli_a2_12', plate: 'PAG1212', monthlyValue: 100 });
+
+  store.seedCharge(
+    makeCharge({
+      id: 'chg_apr_a2_12',
+      clientId: 'cli_a2_12',
+      vehicleId: 'veh_a2_12',
+      vehiclePlate: 'PAG1212',
+      referenceMonth: '2026-04',
+      originalMonthlyValue: 100,
+      totalAmount: 100,
+      paidAmount: 0,
+      remainingBalance: 100,
+      status: 'pendente',
+      balanceHandling: 'none',
+      dueDate: '2026-04-10',
+    })
+  );
+
+  // 1. Primeiro pagamento parcial em abril (R$ 40,00 -> resta R$ 60,00 marcado para next_month)
+  await executeRecordPayment(store, {
+    chargeId: 'chg_apr_a2_12',
+    amount: 40,
+    paymentMethod: 'pix',
+    balanceHandling: 'next_month',
+    operatorId: 'admin_uid',
+    operatorName: 'Admin',
+    operationId: 'pay_a2_12_1',
+  });
+
+  // 2. Segundo pagamento parcial em abril ANTES da geração de maio (R$ 25,00 -> saldo vivo reduz para R$ 35,00)
+  await executeRecordPayment(store, {
+    chargeId: 'chg_apr_a2_12',
+    amount: 25,
+    paymentMethod: 'pix',
+    balanceHandling: 'next_month',
+    operatorId: 'admin_uid',
+    operatorName: 'Admin',
+    operationId: 'pay_a2_12_2',
+  });
+
+  // 3. Geração de maio transporta exatamente o saldo vivo restante (R$ 35,00)
+  const mayGen = await executeMonthlyChargeGeneration(store, {
+    month: '2026-05',
+    clients: [client],
+    vehicles: [vehicle],
+    charges: store.getAllCharges(),
+  });
+  assert.equal(mayGen.created, 1);
+  assert.deepEqual(mayGen.carriedSourceIds, ['chg_apr_a2_12']);
+
+  const mayCharge = store.getCharge('chg_veh_veh_a2_12_2026-05')!;
+  assert.equal(mayCharge.previousBalanceCarried, 35);
+  assert.equal(mayCharge.totalAmount, 135);
+  assert.equal(mayCharge.remainingBalance, 135);
+
+  // 4. Tentar pagar novamente a origem já consumida (abril) é rejeitado para impedir dupla cobrança
+  await assert.rejects(
+    () =>
+      executeRecordPayment(store, {
+        chargeId: 'chg_apr_a2_12',
+        amount: 35,
+        paymentMethod: 'pix',
+        operatorId: 'admin_uid',
+        operatorName: 'Admin',
+        operationId: 'pay_a2_12_dup_origin',
+      }),
+    (err: any) => err instanceof FinancialValidationError && err.code === 'BALANCE_ALREADY_CARRIED'
+  );
+
+  // 5. Pagamento parcial na cobrança de destino (maio): paga R$ 50,00 -> resta R$ 85,00
+  const mayPay1 = await executeRecordPayment(store, {
+    chargeId: mayCharge.id,
+    amount: 50,
+    paymentMethod: 'pix',
+    balanceHandling: 'open_negotiation',
+    operatorId: 'admin_uid',
+    operatorName: 'Admin',
+    operationId: 'pay_a2_12_3',
+  });
+  assert.equal(mayPay1.isFullyPaid, false);
+  assert.equal(mayPay1.newRemainingBalance, 85);
+  assert.equal(
+    consolidateClientFinancials(client, [vehicle], store.getAllCharges()).totalPending,
+    85
+  );
+
+  // 6. Quitação final da cobrança de destino (maio): paga R$ 85,00 -> saldo zero e status pago
+  const mayPay2 = await executeRecordPayment(store, {
+    chargeId: mayCharge.id,
+    amount: 85,
+    paymentMethod: 'dinheiro',
+    operatorId: 'admin_uid',
+    operatorName: 'Admin',
+    operationId: 'pay_a2_12_4',
+  });
+  assert.equal(mayPay2.isFullyPaid, true);
+  assert.equal(mayPay2.newRemainingBalance, 0);
+  assert.equal(store.getCharge(mayCharge.id)!.status, 'pago');
+  assert.equal(store.getCharge(mayCharge.id)!.paidAmount, 135);
+
+  // Total recebido = 40 + 25 + 50 + 85 = 200 (exatamente abril R$ 100 + maio R$ 100) e saldo pendente = 0
+  const finalConsolidated = consolidateClientFinancials(client, [vehicle], store.getAllCharges());
+  assert.equal(finalConsolidated.totalReceived, 200);
+  assert.equal(finalConsolidated.totalPending, 0);
+
+  // 7. Subcenário adicional: quitação integral antes da geração do mês seguinte -> nada é transportado
+  const storePaidBefore = new InMemoryTransactionalFirestore();
+  storePaidBefore.seedCharge(
+    makeCharge({
+      id: 'chg_apr_paid_before',
+      clientId: 'cli_a2_12',
+      vehicleId: 'veh_a2_12',
+      vehiclePlate: 'PAG1212',
+      referenceMonth: '2026-04',
+      totalAmount: 100,
+      paidAmount: 40,
+      remainingBalance: 60,
+      status: 'parcial',
+      balanceHandling: 'next_month',
+      dueDate: '2026-04-10',
+    })
+  );
+  await executeRecordPayment(storePaidBefore, {
+    chargeId: 'chg_apr_paid_before',
+    amount: 60,
+    paymentMethod: 'pix',
+    operatorId: 'admin_uid',
+    operatorName: 'Admin',
+    operationId: 'pay_settle_before_gen',
+  });
+  const mayAfterSettle = await executeMonthlyChargeGeneration(storePaidBefore, {
+    month: '2026-05',
+    clients: [client],
+    vehicles: [vehicle],
+    charges: storePaidBefore.getAllCharges(),
+  });
+  assert.equal(mayAfterSettle.created, 1);
+  assert.equal(mayAfterSettle.carriedSourceIds.length, 0);
+  assert.equal(storePaidBefore.getCharge('chg_veh_veh_a2_12_2026-05')!.previousBalanceCarried, 0);
+  assert.equal(storePaidBefore.getCharge('chg_veh_veh_a2_12_2026-05')!.totalAmount, 100);
 });

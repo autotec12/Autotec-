@@ -1,7 +1,8 @@
 import React, { useState, useMemo } from 'react';
 import { useData } from '../../context/DataContext';
-import { TechnicalServiceOrder } from '../../types';
+import { Client, TechnicalServiceOrder, Vehicle } from '../../types';
 import { formatCurrency, formatDate } from '../../lib/calculations';
+import { classifyRecordLinkStatus, normalizePlate } from '../../lib/clientVehicleLookup';
 import { TechnicalServiceModal } from './TechnicalServiceModal';
 import { TechnicalServiceReceiptModal } from './TechnicalServiceReceiptModal';
 import { ClientServicePaymentModal } from './ClientServicePaymentModal';
@@ -31,6 +32,8 @@ import {
 
 export const TechnicalServicesView: React.FC = () => {
   const {
+    clients,
+    vehicles,
     technicalServices,
     technicians,
     technicianPayments,
@@ -38,6 +41,18 @@ export const TechnicalServicesView: React.FC = () => {
     selectedDetailItem,
     setSelectedDetailItem,
   } = useData();
+
+  const clientsMap = useMemo(() => {
+    const map = new Map<string, Client>();
+    clients.forEach((c) => map.set(c.id, c));
+    return map;
+  }, [clients]);
+
+  const vehiclesMap = useMemo(() => {
+    const map = new Map<string, Vehicle>();
+    vehicles.forEach((v) => map.set(v.id, v));
+    return map;
+  }, [vehicles]);
 
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'pago' | 'parcial' | 'pendente'>('all');
@@ -59,11 +74,13 @@ export const TechnicalServicesView: React.FC = () => {
 
   // Filtered list
   const filteredOrders = useMemo(() => {
+    const plateQuery = normalizePlate(searchTerm);
     return technicalServices.filter((order) => {
       const matchSearch =
         order.orderNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
         order.clientName.toLowerCase().includes(searchTerm.toLowerCase()) ||
         order.vehiclePlate.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (plateQuery.length >= 2 && normalizePlate(order.vehiclePlate).includes(plateQuery)) ||
         order.vehicleModel.toLowerCase().includes(searchTerm.toLowerCase()) ||
         (order.technicianName && order.technicianName.toLowerCase().includes(searchTerm.toLowerCase())) ||
         order.items.some((i) => i.description.toLowerCase().includes(searchTerm.toLowerCase()));
@@ -371,6 +388,30 @@ export const TechnicalServicesView: React.FC = () => {
                           <span className="font-mono font-bold text-slate-700">{order.vehiclePlate}</span>
                           <span className="truncate max-w-[120px] text-slate-400">• {order.vehicleModel}</span>
                         </div>
+                        {(() => {
+                          const linkInfo = classifyRecordLinkStatus({
+                            clientId: order.clientId,
+                            vehicleId: order.vehicleId,
+                            clientsMap,
+                            vehiclesMap,
+                          });
+                          if (!linkInfo.isOrphan) return null;
+                          return (
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              {linkInfo.label && (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-50 text-amber-900 border border-amber-300 text-3xs font-extrabold">
+                                  <AlertCircle className="w-2.5 h-2.5 text-amber-700 shrink-0" />
+                                  {linkInfo.label}
+                                </span>
+                              )}
+                              {linkInfo.secondaryLabel && (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-rose-50 text-rose-800 border border-rose-200 text-3xs font-bold">
+                                  {linkInfo.secondaryLabel}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </td>
 
                       {/* Serviços */}

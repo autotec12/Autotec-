@@ -1,17 +1,25 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useData } from '../../context/DataContext';
 import { Charge, Payment, PaymentMethod } from '../../types';
-import { formatCurrency, getTodayIsoDate } from '../../lib/calculations';
+import {
+  formatCurrency,
+  formatDate,
+  getChargeRemainingBalance,
+  getEffectiveCharges,
+  getTodayIsoDate,
+  isEarlyPaymentDate,
+  roundCurrencyValue,
+} from '../../lib/calculations';
 import { FinancialValidationError, createOperationId } from '../../lib/financialTransactions';
 import { CurrencyInput } from '../common/CurrencyInput';
 import { ClientSearchSelect } from '../common/ClientSearchSelect';
 import {
   X,
-  Users,
   Car,
   CheckCircle2,
   AlertCircle,
   Calendar,
+  CalendarCheck2,
   CreditCard,
   FileText,
   Layers,
@@ -31,19 +39,21 @@ export const ConsolidatedPaymentModal: React.FC<ConsolidatedPaymentModalProps> =
   onClose,
   onSuccess,
 }) => {
-  const { clients, charges, recordConsolidatedPayment } = useData();
+  const { clients, vehicles, charges, recordConsolidatedPayment } = useData();
+
+  const effectiveCharges = useMemo(() => getEffectiveCharges(charges), [charges]);
 
   // Clients that have at least one unpaid charge (active clients only)
   const clientsWithPending = useMemo(() => {
     const clientIds = new Set(
-      charges
-        .filter((c) => c.status !== 'pago' && c.status !== 'cancelado' && c.remainingBalance > 0.009)
+      effectiveCharges
+        .filter((c) => c.status !== 'pago' && c.status !== 'cancelado' && getChargeRemainingBalance(c) > 0.009)
         .map((c) => c.clientId)
     );
     return clients
       .filter((cl) => clientIds.has(cl.id) && cl.status !== 'inativo')
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [clients, charges]);
+  }, [clients, effectiveCharges]);
 
   const [selectedClientId, setSelectedClientId] = useState<string>(
     initialClientId || ''
@@ -60,26 +70,26 @@ export const ConsolidatedPaymentModal: React.FC<ConsolidatedPaymentModalProps> =
   const submittingRef = useRef(false);
   const operationIdRef = useRef<string>(createOperationId('pay_cons'));
 
-  // Unpaid charges for selected client
+  // Unpaid charges for selected client (includes pending future/upcoming charges for early payment)
   const clientPendingCharges = useMemo(() => {
-    return charges
+    return effectiveCharges
       .filter((c) => {
         if (c.clientId !== selectedClientId) return false;
-        if (c.status === 'pago' || c.status === 'cancelado' || c.remainingBalance <= 0.009) return false;
+        if (c.status === 'pago' || c.status === 'cancelado' || getChargeRemainingBalance(c) <= 0.009) return false;
         if (competenceFilter !== 'todos' && c.referenceMonth !== competenceFilter) return false;
         return true;
       })
       .sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''));
-  }, [charges, selectedClientId, competenceFilter]);
+  }, [effectiveCharges, selectedClientId, competenceFilter]);
 
   // Available competences for this client
   const availableCompetences = useMemo(() => {
     const set = new Set<string>();
-    charges
-      .filter((c) => c.clientId === selectedClientId && c.status !== 'pago' && c.status !== 'cancelado' && c.remainingBalance > 0.009)
+    effectiveCharges
+      .filter((c) => c.clientId === selectedClientId && c.status !== 'pago' && c.status !== 'cancelado' && getChargeRemainingBalance(c) > 0.009)
       .forEach((c) => set.add(c.referenceMonth));
     return Array.from(set).sort().reverse();
-  }, [charges, selectedClientId]);
+  }, [effectiveCharges, selectedClientId]);
 
   // Auto-select all pending charges when client or competence changes
   useEffect(() => {
@@ -96,7 +106,9 @@ export const ConsolidatedPaymentModal: React.FC<ConsolidatedPaymentModalProps> =
   }, [clientPendingCharges, selectedChargeIds]);
 
   const totalSelectedDue = useMemo(() => {
-    return selectedCharges.reduce((acc, c) => acc + (Number(c.remainingBalance) || 0), 0);
+    return roundCurrencyValue(
+      selectedCharges.reduce((acc, c) => acc + getChargeRemainingBalance(c), 0)
+    );
   }, [selectedCharges]);
 
   useEffect(() => {
@@ -111,10 +123,10 @@ export const ConsolidatedPaymentModal: React.FC<ConsolidatedPaymentModalProps> =
     let remainingToDistribute = targetAmount;
 
     return selectedCharges.map((charge) => {
-      const due = Number(charge.remainingBalance) || 0;
-      const allocated = Math.min(due, Math.max(0, Math.round(remainingToDistribute * 100) / 100));
-      remainingToDistribute = Math.max(0, Math.round((remainingToDistribute - allocated) * 100) / 100);
-      const remainingAfter = Math.max(0, Math.round((due - allocated) * 100) / 100);
+      const due = getChargeRemainingBalance(charge);
+      const allocated = Math.min(due, Math.max(0, roundCurrencyValue(remainingToDistribute)));
+      remainingToDistribute = Math.max(0, roundCurrencyValue(remainingToDistribute - allocated));
+      const remainingAfter = Math.max(0, roundCurrencyValue(due - allocated));
       return {
         charge,
         due,
@@ -123,6 +135,11 @@ export const ConsolidatedPaymentModal: React.FC<ConsolidatedPaymentModalProps> =
       };
     });
   }, [selectedCharges, paymentMode, partialAmount, totalSelectedDue]);
+
+  const hasEarlySelectedCharge = useMemo(
+    () => selectedCharges.some((c) => isEarlyPaymentDate(paymentDate, c.dueDate)),
+    [selectedCharges, paymentDate]
+  );
 
   const totalToReceive = distribution.reduce((acc, d) => acc + d.allocated, 0);
   const selectedIdsSignature = useMemo(
@@ -212,10 +229,10 @@ export const ConsolidatedPaymentModal: React.FC<ConsolidatedPaymentModalProps> =
             </div>
             <div>
               <h2 className="text-lg font-black tracking-tight">
-                Recebimento Consolidado do Plano
+                Recebimento Consolidado
               </h2>
               <p className="text-xs text-slate-300 mt-0.5">
-                Receba múltiplos veículos do mesmo cliente em uma única operação com baixa individual
+                Receba múltiplos veículos do mesmo cliente (inclusive antecipados) em uma única operação com recibo consolidado
               </p>
             </div>
           </div>
@@ -244,6 +261,7 @@ export const ConsolidatedPaymentModal: React.FC<ConsolidatedPaymentModalProps> =
               </label>
               <ClientSearchSelect
                 clients={clientsWithPending}
+                vehicles={vehicles}
                 selectedClientId={selectedClientId}
                 onSelect={(id) => setSelectedClientId(id)}
               />
@@ -278,6 +296,8 @@ export const ConsolidatedPaymentModal: React.FC<ConsolidatedPaymentModalProps> =
               clientPendingCharges.map((charge) => {
                 const isChecked = Boolean(selectedChargeIds[charge.id]);
                 const dist = distribution.find((d) => d.charge.id === charge.id);
+                const chargeRemaining = getChargeRemainingBalance(charge);
+                const isEarly = isEarlyPaymentDate(paymentDate, charge.dueDate);
                 return (
                   <label
                     key={charge.id}
@@ -299,18 +319,23 @@ export const ConsolidatedPaymentModal: React.FC<ConsolidatedPaymentModalProps> =
                       />
                       <Car className="w-4 h-4 text-slate-400 shrink-0" />
                       <div className="min-w-0">
-                        <div className="font-extrabold text-[#30334F]">
-                          {charge.vehiclePlate} • <span className="font-semibold text-slate-600">{charge.vehicleModel}</span>
+                        <div className="font-extrabold text-[#30334F] flex items-center gap-1.5 flex-wrap">
+                          <span>{charge.vehiclePlate} • <span className="font-semibold text-slate-600">{charge.vehicleModel}</span></span>
+                          {isEarly && (
+                            <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 text-3xs font-extrabold">
+                              Antecipado
+                            </span>
+                          )}
                         </div>
                         <div className="text-2xs text-slate-500">
-                          Competência: <strong>{charge.referenceMonth}</strong> • Situação: <span className="uppercase font-bold">{charge.status}</span>
+                          Competência: <strong>{charge.referenceMonth}</strong> • Venc.: <strong>{formatDate(charge.dueDate)}</strong> • Situação: <span className="uppercase font-bold">{charge.status}</span>
                         </div>
                       </div>
                     </div>
 
                     <div className="text-right shrink-0">
                       <div className="font-black text-[#30334F]">
-                        {formatCurrency(charge.remainingBalance)}
+                        {formatCurrency(chargeRemaining)}
                       </div>
                       {isChecked && paymentMode === 'parcial' && dist && (
                         <div className="text-2xs font-bold text-emerald-700">
@@ -326,6 +351,15 @@ export const ConsolidatedPaymentModal: React.FC<ConsolidatedPaymentModalProps> =
               })
             )}
           </div>
+
+          {hasEarlySelectedCharge && (
+            <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl text-2xs text-emerald-900 flex items-center gap-2">
+              <CalendarCheck2 className="w-4 h-4 shrink-0 text-emerald-600" />
+              <span>
+                Recebimento antecipado detectado: o vencimento original e a competência de cada veículo serão preservados e o recibo consolidado será emitido com o total consolidado.
+              </span>
+            </div>
+          )}
 
           {/* Payment Mode & Amount */}
           <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">

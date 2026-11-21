@@ -1,5 +1,12 @@
 import { Payment, Charge, Client, Vehicle, CompanySettings } from '../types';
-import { formatCurrency, formatDateTime, formatDate } from './calculations';
+import {
+  formatCurrency,
+  formatDateTime,
+  formatDate,
+  getCompetenceLabel,
+  isEarlyPaymentDate,
+  roundCurrencyValue,
+} from './calculations';
 import { AUTOTEC_LOGO_ORIGINAL_DATA_URI, AUTOTEC_LOGO_ORIGINAL_PATH } from '../assets/autotecLogos';
 
 export interface ReceiptContext {
@@ -8,6 +15,7 @@ export interface ReceiptContext {
   client?: Client;
   vehicle?: Vehicle;
   company?: CompanySettings;
+  charges?: Charge[];
 }
 
 /**
@@ -41,7 +49,8 @@ export function generateReceiptSvg(
   charge: Charge,
   client?: Client,
   vehicle?: Vehicle,
-  company?: CompanySettings
+  company?: CompanySettings,
+  allCharges?: Charge[]
 ): string {
   const effectiveCompany: CompanySettings = {
     ...(company || {}),
@@ -49,7 +58,7 @@ export function generateReceiptSvg(
   } as CompanySettings;
 
   if (payment.isConsolidated && payment.consolidatedItems && payment.consolidatedItems.length > 0) {
-    return generateConsolidatedReceiptSvg(payment, client, effectiveCompany);
+    return generateConsolidatedReceiptSvg(payment, client, effectiveCompany, allCharges);
   }
 
   const companyName = effectiveCompany.companyName || 'AUTOTEC RASTREAMENTO VEICULAR';
@@ -76,8 +85,9 @@ export function generateReceiptSvg(
   const vehicleInfo = vehicle
     ? `${vehicle.brand} ${vehicle.model} (${vehicle.color || 'Padrão'})`
     : (charge.vehicleModel || 'Veículo Contratado');
-  const planName = vehicle?.planDescription || 'Plano de Rastreamento Veicular';
   const refMonth = charge.referenceMonth || 'Mensalidade Vigente';
+  const refMonthLabel = getCompetenceLabel(refMonth) || refMonth;
+  const dueDateFormatted = formatDate(charge.dueDate);
 
   // Resolve Financial Values with strict numeric conversion to prevent R$ 0,00
   const rawOriginal = Number(charge.originalMonthlyValue ?? charge.totalAmount ?? payment.amount ?? 0);
@@ -91,8 +101,10 @@ export function generateReceiptSvg(
   const paidVal = formatCurrency(rawPaid);
   const remainingVal = formatCurrency(rawRemaining);
   const hasRemaining = rawRemaining > 0.009;
+  const isEarly = isEarlyPaymentDate(payment.paymentDate, charge.dueDate);
 
-  const dateFormatted = formatDateTime(payment.paymentDate || payment.createdAt);
+  const paymentDateFormatted = formatDate(payment.paymentDate || payment.createdAt);
+  const emissionFormatted = formatDateTime(payment.createdAt || payment.paymentDate);
   const operatorName = payment.operatorName || 'Operador Autorizado';
   const receiptNum = payment.receiptNumber || `REC-${Date.now()}`;
   const footerMsg = effectiveCompany.receiptFooterMessage || 'Agradecemos a confiança e preferência pelos serviços AUTOTEC!';
@@ -224,7 +236,8 @@ export function generateReceiptSvg(
   <text x="55" y="306" font-size="17" font-weight="800" fill="#0F172A">${escapeXml(clientName)}</text>
   <text x="55" y="331" font-size="13" fill="#475569">CPF / CNPJ: <tspan font-weight="700" fill="#1E293B">${escapeXml(clientDoc)}</tspan></text>
   <text x="55" y="355" font-size="13" fill="#475569">Telefone / WhatsApp: <tspan font-weight="700" fill="#1E293B">${escapeXml(clientPhone)}</tspan></text>
-  <text x="55" y="379" font-size="12" fill="#64748B">Data da Emissão: <tspan font-weight="600" fill="#334155">${escapeXml(dateFormatted)}</tspan></text>
+  <text x="55" y="379" font-size="12" fill="#64748B">Data do Pagamento: <tspan font-weight="800" fill="#047857">${escapeXml(paymentDateFormatted)}</tspan></text>
+  <text x="55" y="399" font-size="11" fill="#64748B">Registro / Emissão: <tspan font-weight="600" fill="#334155">${escapeXml(emissionFormatted)}</tspan></text>
 
   <!-- Vertical Divider -->
   <line x1="400" y1="265" x2="400" y2="405" stroke="#CBD5E1" stroke-dasharray="4 4" />
@@ -238,8 +251,8 @@ export function generateReceiptSvg(
   <text x="490" y="314" font-size="16" font-weight="900" fill="#FFFFFF" text-anchor="middle" letter-spacing="2">${escapeXml(plate)}</text>
 
   <text x="425" y="345" font-size="13" font-weight="700" fill="#0F172A">${escapeXml(vehicleInfo)}</text>
-  <text x="425" y="367" font-size="13" fill="#475569">Plano: <tspan font-weight="700" fill="#1E293B">${escapeXml(planName)}</tspan></text>
-  <text x="425" y="389" font-size="13" fill="#475569">Mês de Referência: <tspan font-weight="800" fill="#0284C7">${escapeXml(refMonth)}</tspan></text>
+  <text x="425" y="367" font-size="13" fill="#475569">Competência: <tspan font-weight="800" fill="#0284C7">${escapeXml(refMonthLabel)}</tspan></text>
+  <text x="425" y="389" font-size="13" fill="#475569">Vencimento Original: <tspan font-weight="800" fill="#1E293B">${escapeXml(dueDateFormatted)}</tspan></text>
 
   <!-- FINANCIAL BREAKDOWN SECTION -->
   <rect x="35" y="435" width="730" height="355" rx="12" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.5" />
@@ -299,10 +312,10 @@ export function generateReceiptSvg(
 
   <text x="55" y="835" font-size="12" font-weight="800" fill="#64748B" letter-spacing="0.5">INFORMAÇÕES DA TRANSAÇÃO &amp; AUTENTICAÇÃO</text>
   
-  <text x="55" y="865" font-size="13" fill="#475569">Forma de Liquidação: <tspan font-weight="800" fill="#0F172A">${escapeXml(methodText)}</tspan></text>
-  <text x="55" y="890" font-size="13" fill="#475569">Operador / Recebedor: <tspan font-weight="700" fill="#0F172A">${escapeXml(operatorName)}</tspan></text>
-  <text x="55" y="915" font-size="13" fill="#475569">Data e Hora do Pagamento: <tspan font-weight="700" fill="#0F172A">${escapeXml(dateFormatted)}</tspan></text>
-  <text x="55" y="938" font-size="12" fill="#64748B">Vencimento Original da Fatura: <tspan font-weight="700" fill="#2563EB">${formatDate(charge.dueDate)}</tspan></text>
+  <text x="55" y="862" font-size="13" fill="#475569">Forma de Liquidação: <tspan font-weight="800" fill="#0F172A">${escapeXml(methodText)}</tspan></text>
+  <text x="55" y="885" font-size="13" fill="#475569">Operador / Recebedor: <tspan font-weight="700" fill="#0F172A">${escapeXml(operatorName)}</tspan></text>
+  <text x="55" y="908" font-size="13" fill="#475569">Data do Pagamento: <tspan font-weight="800" fill="#047857">${escapeXml(paymentDateFormatted)}</tspan> • Registro: <tspan font-weight="600" fill="#334155">${escapeXml(emissionFormatted)}</tspan></text>
+  <text x="55" y="932" font-size="12" fill="#475569">Competência: <tspan font-weight="700" fill="#0284C7">${escapeXml(refMonth)}</tspan> • Vencimento Original: <tspan font-weight="700" fill="#2563EB">${escapeXml(dueDateFormatted)}</tspan>${isEarly ? ' • <tspan font-weight="800" fill="#047857">Baixa Antecipada</tspan>' : ''}</text>
 
   <!-- Digital Seal Graphic -->
   <g transform="translate(560, 825)">
@@ -1283,7 +1296,8 @@ export async function shareReceipt(
 function generateConsolidatedReceiptSvg(
   payment: Payment,
   client?: Client,
-  company?: CompanySettings
+  company?: CompanySettings,
+  allCharges?: Charge[]
 ): string {
   const companyName = company?.companyName || 'AUTOTEC RASTREAMENTO VEICULAR';
   const cnpj = company?.cnpj || '38.450.812/0001-94';
@@ -1295,33 +1309,56 @@ function generateConsolidatedReceiptSvg(
   const logoDataUri = company?.logoSvg || AUTOTEC_LOGO_ORIGINAL_DATA_URI;
 
   const items = payment.consolidatedItems || [];
-  const totalOriginal = items.reduce((acc, it) => acc + (Number(it.originalAmount) || 0), 0);
-  const totalReceived = Number(payment.amount || 0);
-  const totalRemaining = Number(payment.remainingAfterPayment || 0);
+  const chargeById = new Map<string, Charge>();
+  (allCharges || []).forEach((c) => chargeById.set(c.id, c));
+
+  const totalOriginal = roundCurrencyValue(
+    items.reduce((acc, it) => acc + (Number(it.originalAmount) || 0), 0)
+  );
+  const totalReceived = roundCurrencyValue(Number(payment.amount || 0));
+  const totalRemaining = roundCurrencyValue(Number(payment.remainingAfterPayment || 0));
+  const hasEarlyItems = items.some((item) => {
+    const resolvedDue = item.dueDate || chargeById.get(item.chargeId)?.dueDate;
+    return isEarlyPaymentDate(payment.paymentDate, resolvedDue);
+  });
 
   const rowHeight = 36;
   const tableHeight = 44 + Math.max(items.length, 1) * rowHeight;
-  const dynamicHeight = 680 + tableHeight;
+  const dynamicHeight = 695 + tableHeight;
 
-  const startY = 350;
+  const startY = 355;
   let rowsSvg = '';
   items.forEach((item, index) => {
     const y = startY + 44 + index * rowHeight;
     const bgFill = index % 2 === 0 ? '#FFFFFF' : '#F8FAFC';
+    const resolvedDue = item.dueDate || chargeById.get(item.chargeId)?.dueDate || '';
+    const dueFormatted = resolvedDue ? formatDate(resolvedDue) : '-';
+    const isItemPaid =
+      item.statusAfterOperation === 'pago' || Number(item.remainingAfterOperation || 0) <= 0.009;
+    const isItemEarly = isEarlyPaymentDate(payment.paymentDate, resolvedDue);
+    const statusLabel = isItemPaid
+      ? isItemEarly
+        ? 'QUITADO (ANTECIP.)'
+        : 'QUITADO'
+      : 'PARCIAL';
+    const statusColor = isItemPaid ? '#047857' : '#B45309';
+
+    // IMPORTANTE: Recibo consolidado NÃO exibe valores individuais por veículo (somente total consolidado).
     rowsSvg += `
       <rect x="35" y="${y - 20}" width="730" height="${rowHeight}" fill="${bgFill}" />
       <line x1="35" y1="${y + rowHeight - 20}" x2="765" y2="${y + rowHeight - 20}" stroke="#E2E8F0" stroke-width="1" />
       <text x="50" y="${y + 2}" font-size="11" font-family="monospace" font-weight="800" fill="#30334F">${escapeXml(item.vehiclePlate)}</text>
-      <text x="145" y="${y + 2}" font-size="10" fill="#475569">${escapeXml((item.vehicleModel || '').slice(0, 22))}</text>
-      <text x="330" y="${y + 2}" font-size="10" font-weight="700" fill="#334155">${escapeXml(item.referenceMonth)}</text>
-      <text x="480" y="${y + 2}" font-size="11" fill="#64748B" text-anchor="end">${escapeXml(formatCurrency(item.originalAmount))}</text>
-      <text x="615" y="${y + 2}" font-size="11" font-weight="800" fill="#047857" text-anchor="end">${escapeXml(formatCurrency(item.paidInThisOperation))}</text>
-      <text x="745" y="${y + 2}" font-size="11" font-weight="700" fill="${item.remainingAfterOperation > 0 ? '#B45309' : '#64748B'}" text-anchor="end">${escapeXml(formatCurrency(item.remainingAfterOperation))}</text>
+      <text x="150" y="${y + 2}" font-size="10.5" fill="#475569">${escapeXml((item.vehicleModel || 'Veículo').slice(0, 26))}</text>
+      <text x="365" y="${y + 2}" font-size="10.5" font-weight="700" fill="#334155">${escapeXml(item.referenceMonth)}</text>
+      <text x="495" y="${y + 2}" font-size="10.5" font-weight="700" fill="#2563EB">${escapeXml(dueFormatted)}</text>
+      <text x="745" y="${y + 2}" font-size="10" font-weight="800" fill="${statusColor}" text-anchor="end">${escapeXml(statusLabel)}</text>
     `;
   });
 
   const totalsY = startY + tableHeight + 20;
-  const footerY = totalsY + 150;
+  const footerY = totalsY + 152;
+  const paymentDateFormatted = formatDate(payment.paymentDate || payment.createdAt);
+  const createdFormatted = formatDateTime(payment.createdAt || payment.paymentDate);
 
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 ${dynamicHeight}" width="100%" height="auto" style="background-color: #FFFFFF; font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: block;">
   <rect x="15" y="15" width="770" height="${dynamicHeight - 30}" rx="16" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="2" />
@@ -1336,42 +1373,43 @@ function generateConsolidatedReceiptSvg(
   <text x="260" y="118" font-size="11" fill="#475569">Tel/WhatsApp: ${escapeXml(phone)} • ${escapeXml(email)}</text>
 
   <rect x="35" y="175" width="730" height="46" rx="10" fill="#30334F" />
-  <text x="50" y="203" font-size="13" font-weight="900" fill="#FFFFFF" letter-spacing="0.6">RECIBO DE RECEBIMENTO CONSOLIDADO DE PLANO</text>
+  <text x="50" y="203" font-size="13" font-weight="900" fill="#FFFFFF" letter-spacing="0.6">RECIBO DE RECEBIMENTO CONSOLIDADO</text>
   <rect x="580" y="184" width="170" height="28" rx="6" fill="#F28C1B" />
   <text x="665" y="203" font-size="11" font-weight="900" fill="#FFFFFF" text-anchor="middle" font-family="monospace">${escapeXml(payment.receiptNumber)}</text>
 
-  <rect x="35" y="235" width="730" height="95" rx="10" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="1" />
-  <text x="55" y="258" font-size="10" font-weight="800" fill="#30334F">CLIENTE / TITULAR DO PLANO:</text>
-  <text x="55" y="278" font-size="14" font-weight="800" fill="#1E293B">${escapeXml(payment.clientName)}</text>
-  <text x="55" y="298" font-size="11" fill="#475569">CPF/CNPJ: <tspan font-weight="700" fill="#1E293B">${escapeXml(client?.document || 'Não informado')}</tspan></text>
-  <text x="55" y="315" font-size="11" fill="#475569">Veículos incluídos: <tspan font-weight="700" fill="#1E293B">${items.length} veículo(s)</tspan></text>
+  <rect x="35" y="235" width="730" height="104" rx="10" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="1" />
+  <text x="55" y="256" font-size="10" font-weight="800" fill="#30334F">CLIENTE / PAGADOR:</text>
+  <text x="55" y="276" font-size="14" font-weight="800" fill="#1E293B">${escapeXml(payment.clientName)}</text>
+  <text x="55" y="295" font-size="11" fill="#475569">CPF/CNPJ: <tspan font-weight="700" fill="#1E293B">${escapeXml(client?.document || 'Não informado')}</tspan></text>
+  <text x="55" y="313" font-size="11" fill="#475569">Veículos contemplados: <tspan font-weight="700" fill="#1E293B">${items.length} mensalidade(s)</tspan></text>
+  <text x="55" y="330" font-size="10" fill="#64748B">Operador: <tspan font-weight="700" fill="#334155">${escapeXml(payment.operatorName || 'Operador Autorizado')}</tspan></text>
 
-  <line x1="430" y1="245" x2="430" y2="320" stroke="#CBD5E1" stroke-width="1" stroke-dasharray="3 3" />
-  <text x="450" y="258" font-size="10" font-weight="800" fill="#30334F">DADOS DO RECEBIMENTO:</text>
-  <text x="450" y="280" font-size="11" fill="#475569">Data: <tspan font-weight="800" fill="#047857">${escapeXml(formatDate(payment.paymentDate))}</tspan></text>
-  <text x="450" y="298" font-size="11" fill="#475569">Forma: <tspan font-weight="800" fill="#1E293B">${escapeXml(PAYMENT_METHOD_LABELS[payment.paymentMethod] || payment.paymentMethod)}</tspan></text>
-  <text x="450" y="316" font-size="11" fill="#475569">Situação: <tspan font-weight="800" fill="${totalRemaining > 0.009 ? '#B45309' : '#047857'}">${totalRemaining > 0.009 ? 'RECEBIMENTO PARCIAL' : 'QUITADO INTEGRALMENTE'}</tspan></text>
+  <line x1="430" y1="245" x2="430" y2="330" stroke="#CBD5E1" stroke-width="1" stroke-dasharray="3 3" />
+  <text x="450" y="256" font-size="10" font-weight="800" fill="#30334F">DADOS DO RECEBIMENTO:</text>
+  <text x="450" y="276" font-size="11" fill="#475569">Data do Pagamento: <tspan font-weight="800" fill="#047857">${escapeXml(paymentDateFormatted)}</tspan></text>
+  <text x="450" y="294" font-size="11" fill="#475569">Forma: <tspan font-weight="800" fill="#1E293B">${escapeXml(PAYMENT_METHOD_LABELS[payment.paymentMethod] || payment.paymentMethod)}</tspan></text>
+  <text x="450" y="312" font-size="11" fill="#475569">Situação: <tspan font-weight="800" fill="${totalRemaining > 0.009 ? '#B45309' : '#047857'}">${totalRemaining > 0.009 ? 'RECEBIMENTO PARCIAL' : 'QUITADO INTEGRALMENTE'}</tspan></text>
+  <text x="450" y="330" font-size="10" fill="${hasEarlyItems ? '#047857' : '#64748B'}" font-weight="${hasEarlyItems ? '700' : '500'}">${hasEarlyItems ? 'Baixa antecipada • Vencimentos originais preservados' : `Emissão: ${escapeXml(createdFormatted)}`}</text>
 
   <rect x="35" y="${startY}" width="730" height="38" rx="8" fill="#30334F" />
   <text x="50" y="${startY + 24}" font-size="10" font-weight="800" fill="#FFFFFF">PLACA</text>
-  <text x="145" y="${startY + 24}" font-size="10" font-weight="800" fill="#FFFFFF">VEÍCULO</text>
-  <text x="330" y="${startY + 24}" font-size="10" font-weight="800" fill="#FFFFFF">COMPETÊNCIA</text>
-  <text x="480" y="${startY + 24}" font-size="10" font-weight="800" fill="#FFFFFF" text-anchor="end">VALOR ORIGINAL</text>
-  <text x="615" y="${startY + 24}" font-size="10" font-weight="800" fill="#FFFFFF" text-anchor="end">RECEBIDO</text>
-  <text x="745" y="${startY + 24}" font-size="10" font-weight="800" fill="#FFFFFF" text-anchor="end">RESTANTE</text>
+  <text x="150" y="${startY + 24}" font-size="10" font-weight="800" fill="#FFFFFF">VEÍCULO</text>
+  <text x="365" y="${startY + 24}" font-size="10" font-weight="800" fill="#FFFFFF">COMPETÊNCIA</text>
+  <text x="495" y="${startY + 24}" font-size="10" font-weight="800" fill="#FFFFFF">VENCIMENTO ORIGINAL</text>
+  <text x="745" y="${startY + 24}" font-size="10" font-weight="800" fill="#FFFFFF" text-anchor="end">SITUAÇÃO</text>
 
   ${rowsSvg}
 
-  <rect x="35" y="${totalsY}" width="730" height="105" rx="12" fill="#30334F" />
-  <text x="60" y="${totalsY + 32}" font-size="11" font-weight="700" fill="#CBD5E1">VALOR ORIGINAL DO PLANO: <tspan fill="#FFFFFF" font-weight="800">${escapeXml(formatCurrency(totalOriginal))}</tspan></text>
-  <text x="60" y="${totalsY + 58}" font-size="11" font-weight="700" fill="#CBD5E1">SALDO RESTANTE: <tspan fill="${totalRemaining > 0.009 ? '#FBBF24' : '#34D399'}" font-weight="800">${escapeXml(formatCurrency(totalRemaining))}</tspan></text>
-  <text x="60" y="${totalsY + 84}" font-size="10" fill="#94A3B8">Controle individual por veículo preservado</text>
+  <rect x="35" y="${totalsY}" width="730" height="108" rx="12" fill="#30334F" />
+  <text x="60" y="${totalsY + 32}" font-size="11" font-weight="700" fill="#CBD5E1">VALOR TOTAL CONSOLIDADO: <tspan fill="#FFFFFF" font-weight="800">${escapeXml(formatCurrency(totalOriginal))}</tspan></text>
+  <text x="60" y="${totalsY + 58}" font-size="11" font-weight="700" fill="#CBD5E1">SALDO RESTANTE CONSOLIDADO: <tspan fill="${totalRemaining > 0.009 ? '#FBBF24' : '#34D399'}" font-weight="800">${escapeXml(formatCurrency(totalRemaining))}</tspan></text>
+  <text x="60" y="${totalsY + 85}" font-size="10" fill="#94A3B8">Recibo consolidado com valores agrupados • Controle individual mantido no financeiro</text>
 
   <text x="735" y="${totalsY + 35}" font-size="11" font-weight="800" fill="#F28C1B" text-anchor="end">TOTAL EFETIVAMENTE RECEBIDO</text>
   <text x="735" y="${totalsY + 75}" font-size="28" font-weight="900" fill="#34D399" text-anchor="end">${escapeXml(formatCurrency(totalReceived))}</text>
 
   <text x="400" y="${footerY}" font-size="9" fill="#94A3B8" text-anchor="middle">
-    AUTOTEC Rastreamento Veicular • Recibo consolidado emitido em ${escapeXml(formatDateTime(payment.createdAt))}
+    AUTOTEC Rastreamento Veicular • Recibo consolidado emitido em ${escapeXml(createdFormatted)}
   </text>
 </svg>`;
 }

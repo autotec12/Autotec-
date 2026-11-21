@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Vehicle, VehicleType, VehicleStatus } from '../../types';
 import { useData } from '../../context/DataContext';
 import { ClientSearchSelect } from '../common/ClientSearchSelect';
+import { validateVehicleOwnershipAndDuplicity } from '../../lib/clientVehicleLookup';
 import { Car, X, Check, AlertCircle, Radio } from 'lucide-react';
 
 interface VehicleModalProps {
@@ -17,19 +18,22 @@ export const VehicleModal: React.FC<VehicleModalProps> = ({
   onClose,
   onSuccess,
 }) => {
-  const { clients, plans, addVehicle, updateVehicle } = useData();
+  const { clients, vehicles, addVehicle, updateVehicle } = useData();
 
-  const activeClients = clients.filter((c) => c.status !== 'inativo');
+  const selectableClients = clients.filter(
+    (c) => c.status !== 'inativo' || c.id === (vehicle?.clientId || preselectedClientId)
+  );
   const [clientId, setClientId] = useState(vehicle?.clientId || preselectedClientId || '');
   const [vehicleType, setVehicleType] = useState<VehicleType>(vehicle?.vehicleType || 'carro');
-  const [planId, setPlanId] = useState<string>(vehicle?.planId || '');
   const [brand, setBrand] = useState(vehicle?.brand || '');
   const [model, setModel] = useState(vehicle?.model || '');
   const [plate, setPlate] = useState(vehicle?.plate || '');
   const [color, setColor] = useState(vehicle?.color || '');
   const [trackerModel, setTrackerModel] = useState(vehicle?.trackerModel || '');
   const [trackerSerial, setTrackerSerial] = useState(vehicle?.trackerSerial || '');
-  const [planDescription, setPlanDescription] = useState(vehicle?.planDescription || 'Rastreamento Veicular Mensal');
+  const [planDescription, setPlanDescription] = useState(
+    vehicle?.planDescription || 'Rastreamento Veicular Mensal'
+  );
   const [monthlyValue, setMonthlyValue] = useState<string>(vehicle ? String(vehicle.monthlyValue) : '80');
   const [dueDay, setDueDay] = useState<string>(vehicle ? String(vehicle.dueDay) : '10');
   const [contractStartDate, setContractStartDate] = useState(
@@ -40,16 +44,25 @@ export const VehicleModal: React.FC<VehicleModalProps> = ({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const isClientLocked = Boolean(preselectedClientId) || Boolean(vehicle && clients.some((c) => c.id === vehicle.clientId));
+  const isOrphanVehicleClient = Boolean(vehicle && !clients.some((c) => c.id === vehicle.clientId));
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!clientId) {
-      setError('Selecione o cliente responsável pelo veículo/contrato.');
+
+    const ownershipCheck = validateVehicleOwnershipAndDuplicity({
+      clientId,
+      plate,
+      clients,
+      vehicles,
+      editingVehicle: vehicle || null,
+      allowClientTransfer: false,
+    });
+    if (!ownershipCheck.ok) {
+      setError(ownershipCheck.error || 'Dados inválidos para salvar o veículo.');
       return;
     }
-    if (!plate.trim()) {
-      setError('A placa do veículo é obrigatória para identificação.');
-      return;
-    }
+
     const val = parseFloat(monthlyValue.replace(',', '.'));
     if (isNaN(val) || val < 0) {
       setError('Informe um valor mensal contratado válido.');
@@ -65,11 +78,9 @@ export const VehicleModal: React.FC<VehicleModalProps> = ({
       setSubmitting(true);
       setError(null);
 
-      const matchedPlan = planId ? plans.find((p) => p.id === planId) : null;
-      const finalPlanName = matchedPlan ? matchedPlan.name : undefined;
-
       const cleanTrackerModel = trackerModel.trim() || undefined;
       const cleanTrackerSerial = trackerSerial.trim() || undefined;
+      const cleanPlate = ownershipCheck.formattedPlate || plate.toUpperCase().trim();
 
       if (vehicle) {
         await updateVehicle(vehicle.id, {
@@ -77,12 +88,10 @@ export const VehicleModal: React.FC<VehicleModalProps> = ({
           vehicleType,
           brand: brand.trim(),
           model: model.trim(),
-          plate: plate.toUpperCase().trim(),
+          plate: cleanPlate,
           color: color.trim(),
           trackerModel: cleanTrackerModel,
           trackerSerial: cleanTrackerSerial,
-          planId: planId || undefined,
-          planName: finalPlanName,
           planDescription: planDescription.trim(),
           monthlyValue: val,
           dueDay: day,
@@ -97,12 +106,10 @@ export const VehicleModal: React.FC<VehicleModalProps> = ({
           vehicleType,
           brand: brand.trim(),
           model: model.trim(),
-          plate: plate.toUpperCase().trim(),
+          plate: cleanPlate,
           color: color.trim(),
           trackerModel: cleanTrackerModel,
           trackerSerial: cleanTrackerSerial,
-          planId: planId || undefined,
-          planName: finalPlanName,
           planDescription: planDescription.trim(),
           monthlyValue: val,
           dueDay: day,
@@ -112,9 +119,9 @@ export const VehicleModal: React.FC<VehicleModalProps> = ({
         });
         onSuccess(id);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error saving vehicle:', err);
-      setError('Erro ao salvar veículo no Firestore.');
+      setError(err?.message || 'Erro ao salvar veículo no Firestore.');
       setSubmitting(false);
     }
   };
@@ -133,13 +140,14 @@ export const VehicleModal: React.FC<VehicleModalProps> = ({
                 {vehicle ? 'Editar Veículo / Contrato' : 'Cadastrar Veículo para Rastreamento'}
               </h3>
               <p className="text-xs text-white/75">
-                Cadastro para controle financeiro, identificação e mensalidades
+                Mensalidade individual por veículo vinculada ao cliente titular
               </p>
             </div>
           </div>
           <button
+            type="button"
             onClick={onClose}
-            className="p-1.5 text-white/70 hover:text-white rounded-lg hover:bg-white/10 transition"
+            className="p-1.5 text-white/70 hover:text-white rounded-lg hover:bg-white/10 transition cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -154,15 +162,32 @@ export const VehicleModal: React.FC<VehicleModalProps> = ({
             </div>
           )}
 
+          {isOrphanVehicleClient && (
+            <div className="p-3 bg-amber-50 border border-amber-300 rounded-lg text-xs text-amber-900 flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-amber-600" />
+              <span>
+                Este registro possui um cliente anterior não encontrado no cadastro atual ({vehicle?.clientId}).
+                Para preservar o histórico, a edição exige um cliente titular válido.
+              </span>
+            </div>
+          )}
+
           {/* Client select */}
           <div>
             <label className="block text-xs font-bold text-[#30334F] mb-1.5">
               Cliente Responsável Titular *
             </label>
             <ClientSearchSelect
-              clients={activeClients}
+              clients={selectableClients}
+              vehicles={vehicles}
               selectedClientId={clientId}
               onSelect={(id) => setClientId(id)}
+              disabled={isClientLocked}
+              lockedReason={
+                preselectedClientId
+                  ? 'Cliente preenchido automaticamente a partir da ficha do cliente.'
+                  : 'Titularidade bloqueada durante a edição para evitar transferência silenciosa entre clientes.'
+              }
             />
           </div>
 
@@ -300,55 +325,23 @@ export const VehicleModal: React.FC<VehicleModalProps> = ({
             </p>
           </div>
 
-          {/* Plan Selector */}
+          {/* Service Description (replaces discontinued Plans selector) */}
           <div>
             <label className="block text-xs font-bold text-[#30334F] mb-1.5">
-              Plano / Pacote Comercial Vinculado
-            </label>
-            <select
-              value={planId}
-              onChange={(e) => {
-                const selectedId = e.target.value;
-                setPlanId(selectedId);
-                if (selectedId) {
-                  const p = plans.find((item) => item.id === selectedId);
-                  if (p) {
-                    setPlanDescription(p.name);
-                    const compMatch = p.composition.find((c) => c.vehicleType === vehicleType);
-                    if (compMatch) {
-                      setMonthlyValue(String(compMatch.unitValue));
-                    }
-                  }
-                }
-              }}
-              className="w-full bg-[#F8F9FA] border border-[#DCE0D9] rounded-xl px-3.5 py-2.5 text-sm text-[#1E2235] focus:outline-hidden focus:border-[#30334F] focus:bg-white"
-            >
-              <option value="">Tarifa Avulsa / Personalizada (Sem Plano Vinculado)</option>
-              {plans
-                .filter((p) => p.status === 'ativo' || p.id === planId)
-                .map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name} — Total: R$ {p.totalMonthlyValue.toFixed(2)}/mês {p.status === 'inativo' ? '(Inativo)' : ''}
-                  </option>
-                ))}
-            </select>
-            <p className="text-3xs text-slate-500 mt-1">
-              Ao selecionar um plano, o valor mensal sugerido é preenchido automaticamente com base na composição do pacote.
-            </p>
-          </div>
-
-          {/* Plan Description */}
-          <div>
-            <label className="block text-xs font-bold text-[#30334F] mb-1.5">
-              Serviço Contratado / Descrição do Plano
+              Descrição do Serviço
             </label>
             <input
               type="text"
               value={planDescription}
               onChange={(e) => setPlanDescription(e.target.value)}
-              placeholder="Ex: Rastreamento 24h + Bloqueio Remoto"
+              placeholder="Ex: Rastreamento Veicular 24h + Bloqueio Remoto"
               className="w-full bg-[#F8F9FA] border border-[#DCE0D9] rounded-xl px-3.5 py-2.5 text-sm text-[#1E2235] placeholder-slate-400 focus:outline-hidden focus:border-[#30334F] focus:bg-white"
             />
+            {vehicle?.planName && (
+              <p className="text-3xs text-slate-500 mt-1">
+                Registro histórico de plano descontinuado preservado: <strong>{vehicle.planName}</strong> (somente consulta histórica).
+              </p>
+            )}
           </div>
 
           {/* Monthly Value & Due Day & Start Date */}
@@ -416,14 +409,14 @@ export const VehicleModal: React.FC<VehicleModalProps> = ({
               type="button"
               onClick={onClose}
               disabled={submitting}
-              className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-[#30334F] rounded-lg hover:bg-[#F3F4F2] transition"
+              className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-[#30334F] rounded-lg hover:bg-[#F3F4F2] transition cursor-pointer"
             >
               Cancelar
             </button>
             <button
               type="submit"
               disabled={submitting}
-              className="px-5 py-2.5 text-xs font-bold bg-[#30334F] hover:bg-[#252840] text-white rounded-xl shadow-md flex items-center gap-2 transition disabled:opacity-50"
+              className="px-5 py-2.5 text-xs font-bold bg-[#30334F] hover:bg-[#252840] text-white rounded-xl shadow-md flex items-center gap-2 transition disabled:opacity-50 cursor-pointer"
             >
               <Check className="w-4 h-4 text-[#F28C1B]" />
               {submitting ? 'Salvando...' : vehicle ? 'Salvar Veículo' : 'Cadastrar Veículo'}
@@ -434,3 +427,4 @@ export const VehicleModal: React.FC<VehicleModalProps> = ({
     </div>
   );
 };
+

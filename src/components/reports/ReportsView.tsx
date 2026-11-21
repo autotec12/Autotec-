@@ -5,7 +5,14 @@ import {
   formatDate,
   formatDateTime,
   getTodayIsoDate,
-  getCurrentMonthStr,
+  getChargeRemainingBalance,
+  getEffectiveCharges,
+  getPaymentAmountForCharge,
+  getPaymentEffectiveDate,
+  getPaymentsForCharge,
+  isEarlyPaymentDate,
+  normalizeIsoDate,
+  roundCurrencyValue,
 } from '../../lib/calculations';
 import {
   generateTechnicalServicesReportPdf,
@@ -188,17 +195,29 @@ export const ReportsView: React.FC = () => {
     });
   }, [companyExpenses, dateRange, period, customStartDate, customEndDate, searchTerm, selectedCategory, selectedStatus]);
 
-  // 3. FILTERED CHARGES (Mensalidades - Corrigido com filtros precisos)
+  // 3. FILTERED CHARGES (Mensalidades - inclui cobranças pagas antecipadamente na data real do caixa)
   const filteredCharges = useMemo(() => {
-    return charges.filter((c) => {
-      // Período: verifica tanto a data de vencimento quanto a competência do mês
+    const isBoundedPeriod =
+      period !== 'personalizado' || Boolean(customStartDate || customEndDate);
+
+    return getEffectiveCharges(charges).filter((c) => {
+      if (c.status === 'cancelado') return false;
+
+      const linkedPayments = getPaymentsForCharge(payments, c.id);
+
+      // Período: verifica vencimento, competência OU pagamento efetivo (baixa antecipada) no intervalo
       let matchPeriod = true;
-      if (period !== 'personalizado' || (customStartDate && customEndDate)) {
-        const dueDate = c.dueDate || c.createdAt.slice(0, 10);
-        const refMonthStart = `${c.referenceMonth}-01`;
-        const inDueDateRange = dueDate >= dateRange.start && dueDate <= dateRange.end;
-        const inRefMonthRange = refMonthStart >= dateRange.start && refMonthStart <= dateRange.end;
-        matchPeriod = inDueDateRange || inRefMonthRange;
+      if (isBoundedPeriod) {
+        const dueDate = normalizeIsoDate(c.dueDate) || (c.createdAt || '').slice(0, 10);
+        const refMonthStart = c.referenceMonth ? `${c.referenceMonth}-01` : '';
+        const inDueDateRange = Boolean(dueDate) && dueDate >= dateRange.start && dueDate <= dateRange.end;
+        const inRefMonthRange =
+          Boolean(refMonthStart) && refMonthStart >= dateRange.start && refMonthStart <= dateRange.end;
+        const inPaymentDateRange = linkedPayments.some((p) => {
+          const pDate = getPaymentEffectiveDate(p);
+          return Boolean(pDate) && pDate >= dateRange.start && pDate <= dateRange.end;
+        });
+        matchPeriod = inDueDateRange || inRefMonthRange || inPaymentDateRange;
       }
 
       // Busca por texto
@@ -212,10 +231,12 @@ export const ReportsView: React.FC = () => {
       const matchClient = !selectedClientId || c.clientId === selectedClientId;
       const matchVehicle = !selectedVehicleId || c.vehicleId === selectedVehicleId;
 
-      // Situação real da mensalidade
-      const isPaid = (c.remainingBalance <= 0.009) || (c.status === 'pago');
+      // Situação real da mensalidade (cobrança antecipadamente quitada nunca é inadimplente)
+      const remaining = getChargeRemainingBalance(c);
+      const normalizedDue = normalizeIsoDate(c.dueDate);
+      const isPaid = c.status === 'pago' || remaining <= 0.009;
       const isPartial = !isPaid && (c.paidAmount > 0 || c.status === 'parcial');
-      const isOverdue = !isPaid && !isPartial && (c.dueDate < todayStr);
+      const isOverdue = !isPaid && Boolean(normalizedDue) && normalizedDue < todayStr;
       const isPendingOnTime = !isPaid && !isPartial && !isOverdue;
 
       let matchStatus = true;
@@ -231,7 +252,33 @@ export const ReportsView: React.FC = () => {
 
       return matchPeriod && matchSearch && matchClient && matchVehicle && matchStatus;
     });
-  }, [charges, dateRange, period, customStartDate, customEndDate, searchTerm, selectedClientId, selectedVehicleId, selectedStatus, todayStr]);
+  }, [charges, payments, dateRange, period, customStartDate, customEndDate, searchTerm, selectedClientId, selectedVehicleId, selectedStatus, todayStr]);
+
+  // Total recebido real (caixa) no período selecionado com base na data real do pagamento (paymentDate)
+  const monthlyReportReceivedInPeriod = useMemo(() => {
+    const isBoundedPeriod =
+      period !== 'personalizado' || Boolean(customStartDate || customEndDate);
+    const filteredIds = new Set(filteredCharges.map((c) => c.id));
+    let total = 0;
+
+    payments.forEach((p) => {
+      const pDate = getPaymentEffectiveDate(p);
+      if (isBoundedPeriod && (!pDate || pDate < dateRange.start || pDate > dateRange.end)) {
+        return;
+      }
+      if (p.isConsolidated && Array.isArray(p.consolidatedItems) && p.consolidatedItems.length > 0) {
+        p.consolidatedItems.forEach((item) => {
+          if (filteredIds.has(item.chargeId)) {
+            total = roundCurrencyValue(total + (Number(item.paidInThisOperation) || 0));
+          }
+        });
+      } else if (filteredIds.has(p.chargeId)) {
+        total = roundCurrencyValue(total + (Number(p.amount) || 0));
+      }
+    });
+
+    return total;
+  }, [filteredCharges, payments, dateRange, period, customStartDate, customEndDate]);
 
   // 4. FILTERED CLIENTS
   const filteredClients = useMemo(() => {
@@ -508,11 +555,11 @@ export const ReportsView: React.FC = () => {
                   <span className="text-slate-600">
                     Faturado: {formatCurrency(filteredCharges.reduce((a, c) => a + (c.totalAmount || 0), 0))}
                   </span>
-                  <span className="text-emerald-700">
-                    Recebido: {formatCurrency(filteredCharges.reduce((a, c) => a + (c.paidAmount || 0), 0))}
+                  <span className="text-emerald-700" title="Somatório real recebido na data de pagamento dentro do período filtrado">
+                    Recebido no Período (Caixa): {formatCurrency(monthlyReportReceivedInPeriod)}
                   </span>
                   <span className="text-[#F28C1B]">
-                    A Receber: {formatCurrency(filteredCharges.reduce((a, c) => a + (c.remainingBalance || 0), 0))}
+                    A Receber: {formatCurrency(filteredCharges.reduce((a, c) => a + getChargeRemainingBalance(c), 0))}
                   </span>
                 </div>
               </div>
@@ -542,12 +589,14 @@ export const ReportsView: React.FC = () => {
                       </tr>
                     ) : (
                       filteredCharges.map((c) => {
-                        const linked = payments
-                          .filter((p) => p.chargeId === c.id)
-                          .sort((a, b) => (a.paymentDate || '').localeCompare(b.paymentDate || ''));
-                        const isPaid = c.remainingBalance <= 0.009 || c.status === 'pago';
+                        const linked = getPaymentsForCharge(payments, c.id).sort((a, b) =>
+                          getPaymentEffectiveDate(a).localeCompare(getPaymentEffectiveDate(b))
+                        );
+                        const remaining = getChargeRemainingBalance(c);
+                        const normalizedDue = normalizeIsoDate(c.dueDate);
+                        const isPaid = c.status === 'pago' || remaining <= 0.009;
                         const isPartial = !isPaid && (c.paidAmount > 0 || c.status === 'parcial');
-                        const isOverdue = !isPaid && !isPartial && c.dueDate < todayStr;
+                        const isOverdue = !isPaid && Boolean(normalizedDue) && normalizedDue < todayStr;
                         const situationLabel = isPaid ? 'Paga' : isPartial ? 'Parcial' : isOverdue ? 'Vencida' : 'Pendente';
 
                         return (
@@ -573,7 +622,7 @@ export const ReportsView: React.FC = () => {
                               {formatCurrency(c.paidAmount)}
                             </td>
                             <td className="py-3 px-4 text-right font-bold text-[#F28C1B]">
-                              {formatCurrency(c.remainingBalance)}
+                              {formatCurrency(remaining)}
                             </td>
                             <td className="py-3 px-4 text-center">
                               <span
@@ -593,15 +642,25 @@ export const ReportsView: React.FC = () => {
                             <td className="py-3 px-4 text-2xs text-slate-600">
                               {linked.length > 0 ? (
                                 <div className="space-y-0.5">
-                                  {linked.map((p) => (
-                                    <div key={p.id} className="flex items-center gap-1">
-                                      <span className="font-semibold text-slate-700">
-                                        Recibo #{p.receiptNumber}
-                                      </span>
-                                      <span className="text-slate-400">({formatDate(p.paymentDate)})</span>:
-                                      <strong className="text-emerald-700">{formatCurrency(p.amount)}</strong>
-                                    </div>
-                                  ))}
+                                  {linked.map((p) => {
+                                    const early = isEarlyPaymentDate(p.paymentDate, c.dueDate);
+                                    return (
+                                      <div key={p.id} className="flex items-center gap-1 flex-wrap">
+                                        <span className="font-semibold text-slate-700">
+                                          Recibo #{p.receiptNumber}
+                                        </span>
+                                        <span className="text-slate-400">({formatDate(p.paymentDate)})</span>:
+                                        <strong className="text-emerald-700">
+                                          {formatCurrency(getPaymentAmountForCharge(p, c.id))}
+                                        </strong>
+                                        {early && (
+                                          <span className="px-1 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 text-3xs font-bold">
+                                            Antecipado
+                                          </span>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
                                 </div>
                               ) : isPaid ? (
                                 <span className="text-emerald-600 font-medium">Quitada</span>
